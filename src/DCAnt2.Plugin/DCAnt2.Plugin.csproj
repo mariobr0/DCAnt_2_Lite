@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\DCAnt2.Core\DCAnt2.Core.csproj" />
+    <ProjectReference Include="..\DCAnt2.Infrastructure\DCAnt2.Infrastructure.csproj" />
+    <ProjectReference Include="..\DCAnt2.Quantower\DCAnt2.Quantower.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

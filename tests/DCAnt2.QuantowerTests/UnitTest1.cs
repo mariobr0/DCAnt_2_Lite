@@ -1,0 +1,10 @@
+﻿namespace DCAnt2.QuantowerTests;
+
+public class UnitTest1
+{
+    [Fact]
+    public void Test1()
+    {
+
+    }
+}

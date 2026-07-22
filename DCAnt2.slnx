@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DCAnt2.Core/DCAnt2.Core.csproj" />
+    <Project Path="src/DCAnt2.Infrastructure/DCAnt2.Infrastructure.csproj" />
+    <Project Path="src/DCAnt2.Plugin/DCAnt2.Plugin.csproj" />
+    <Project Path="src/DCAnt2.Quantower/DCAnt2.Quantower.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DCAnt2.QuantowerTests/DCAnt2.QuantowerTests.csproj" />
+    <Project Path="tests/DCAnt2.Tests/DCAnt2.Tests.csproj" />
+  </Folder>
+</Solution>
