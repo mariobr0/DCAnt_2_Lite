@@ -33,7 +33,7 @@ public class TradeCycleTests
         var startIntent = (PlaceOrderIntent)cycle.Outbox[0];
         cycle.ClearOutbox();
 
-        cycle.Handle(new OrderExecuted(startIntent.OrderId, new Price(100m), new Quantity(1m)));
+        cycle.Handle(new OrderExecuted("exec1", startIntent.OrderId, new Price(100m), new Quantity(1m)));
 
         Assert.Equal(1m, cycle.PositionQuantity.Value);
         Assert.Equal(100m, cycle.PositionVwap.Value);
@@ -53,14 +53,14 @@ public class TradeCycleTests
         var cycle = new TradeCycle(TradeCycleId.New(), 2m, _rules, OrderSide.Buy);
         cycle.Start(new Price(100m), new Quantity(1m));
         var startIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
-        cycle.Handle(new OrderExecuted(startIntent.OrderId, new Price(100m), new Quantity(1m)));
+        cycle.Handle(new OrderExecuted("exec1", startIntent.OrderId, new Price(100m), new Quantity(1m)));
         cycle.ClearOutbox();
 
         cycle.PlaceDca(new Price(90m), new Quantity(1m));
         var dcaIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
         cycle.ClearOutbox();
 
-        cycle.Handle(new OrderExecuted(dcaIntent.OrderId, new Price(90m), new Quantity(1m)));
+        cycle.Handle(new OrderExecuted("exec2", dcaIntent.OrderId, new Price(90m), new Quantity(1m)));
 
         Assert.Equal(2m, cycle.PositionQuantity.Value);
         Assert.Equal(95m, cycle.PositionVwap.Value); // (100*1 + 90*1)/2
@@ -82,7 +82,7 @@ public class TradeCycleTests
         var cycle = new TradeCycle(TradeCycleId.New(), 2m, _rules, OrderSide.Buy);
         cycle.Start(new Price(100m), new Quantity(1m));
         var startIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
-        cycle.Handle(new OrderExecuted(startIntent.OrderId, new Price(100m), new Quantity(1m)));
+        cycle.Handle(new OrderExecuted("exec1", startIntent.OrderId, new Price(100m), new Quantity(1m)));
         cycle.ClearOutbox();
 
         cycle.PlaceDca(new Price(90m), new Quantity(1m));
@@ -99,7 +99,7 @@ public class TradeCycleTests
         var cycle = new TradeCycle(TradeCycleId.New(), 2m, _rules, OrderSide.Buy);
         cycle.Start(new Price(100m), new Quantity(1m));
         var startIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
-        cycle.Handle(new OrderExecuted(startIntent.OrderId, new Price(100m), new Quantity(1m)));
+        cycle.Handle(new OrderExecuted("exec1", startIntent.OrderId, new Price(100m), new Quantity(1m)));
         cycle.ClearOutbox();
 
         cycle.PlaceDca(new Price(90m), new Quantity(1m));
@@ -121,11 +121,11 @@ public class TradeCycleTests
         var startIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
         cycle.ClearOutbox();
         
-        cycle.Handle(new OrderExecuted(startIntent.OrderId, new Price(100m), new Quantity(1m)));
+        cycle.Handle(new OrderExecuted("exec1", startIntent.OrderId, new Price(100m), new Quantity(1m)));
         
         var tpIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single(x => x.Purpose == OrderPurpose.TakeProfit);
         
-        cycle.Handle(new OrderExecuted(tpIntent.OrderId, tpIntent.Price, tpIntent.Quantity));
+        cycle.Handle(new OrderExecuted("exec2", tpIntent.OrderId, tpIntent.Price, tpIntent.Quantity));
         
         Assert.Equal(TradeCycleStatus.Completed, cycle.Status);
         Assert.Equal(0m, cycle.PositionQuantity.Value);
