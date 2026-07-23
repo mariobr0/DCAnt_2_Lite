@@ -69,7 +69,7 @@ public class SqliteTradingStateStoreTests : IDisposable
         cycle.Start(new Price(100m), new Quantity(1m));
         
         var intents = cycle.Outbox.ToList();
-        var execId = "exec123";
+        var execId = new ExecutionId("exec123");
         var exec = new OrderExecuted(execId, intents.OfType<PlaceOrderIntent>().First().OrderId, new Price(100), new Quantity(1));
 
         // Act
@@ -101,7 +101,7 @@ public class SqliteTradingStateStoreTests : IDisposable
         var cycle = new TradeCycle(TradeCycleId.New(), 2m, rules, OrderSide.Buy);
         cycle.Start(new Price(100m), new Quantity(1m));
         var intents = cycle.Outbox.ToList();
-        var exec = new OrderExecuted("exec-xyz", intents.OfType<PlaceOrderIntent>().First().OrderId, new Price(100), new Quantity(1));
+        var exec = new OrderExecuted(new ExecutionId("exec-xyz"), intents.OfType<PlaceOrderIntent>().First().OrderId, new Price(100), new Quantity(1));
 
         // Act & Assert
         Assert.False(_store.IsExecutionProcessed("exec-xyz"));
