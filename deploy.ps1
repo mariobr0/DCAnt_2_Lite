@@ -3,10 +3,11 @@ param (
 )
 
 $timestamp = Get-Date -Format "HHmmss"
-$strategyFile = "C:\Users\dzam\Desktop\Code\QuantowerCode\DCAnt_2_Lite\src\DCAnt2.Plugin\SingleTradeLiveTestStrategy.cs"
-$content = Get-Content $strategyFile
-$content = $content -replace 'Name = "DCAnt2 Live Test \d{6}";', "Name = `"DCAnt2 Live Test $timestamp`";"
-Set-Content -Path $strategyFile -Value $content -Encoding UTF8
+
+$strategyFile2 = "C:\Users\dzam\Desktop\Code\QuantowerCode\DCAnt_2_Lite\src\DCAnt2.Plugin\DcaGridLiveTestStrategy.cs"
+$content2 = Get-Content $strategyFile2
+$content2 = $content2 -replace 'Name = "DCAnt2 Grid Test \d{6}";', "Name = `"DCAnt2 Grid Test $timestamp`";"
+Set-Content -Path $strategyFile2 -Value $content2 -Encoding UTF8
 
 Write-Host "=== Building DCAnt 2 Plugin ($Configuration) ==="
 dotnet build -c $Configuration

@@ -95,5 +95,9 @@ public class MigrationRunner
                 FOREIGN KEY (TradeCycleId) REFERENCES TradeCycles(Id)
             );
         ");
+
+        yield return (2, "AddStateSnapshot", @"
+            ALTER TABLE TradeCycles ADD COLUMN StateSnapshot TEXT NULL;
+        ");
     }
 }

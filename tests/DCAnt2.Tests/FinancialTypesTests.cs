@@ -1,4 +1,4 @@
-using DCAnt2.Core.Domain;
+﻿using DCAnt2.Core.Domain;
 using System;
 using Xunit;
 

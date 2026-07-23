@@ -11,12 +11,14 @@ public class QuantowerAdapter
     private readonly EngineLoop _engineLoop;
     private readonly Account _account;
     private readonly Symbol _symbol;
+    private readonly Action<string> _log;
 
-    public QuantowerAdapter(EngineLoop engineLoop, Account account, Symbol symbol)
+    public QuantowerAdapter(EngineLoop engineLoop, Account account, Symbol symbol, Action<string>? log = null)
     {
         _engineLoop = engineLoop ?? throw new ArgumentNullException(nameof(engineLoop));
         _account = account ?? throw new ArgumentNullException(nameof(account));
         _symbol = symbol ?? throw new ArgumentNullException(nameof(symbol));
+        _log = log ?? (_ => { });
     }
 
     /// <summary>
@@ -68,21 +70,42 @@ public class QuantowerAdapter
         {
             if (intent is PlaceOrderIntent placeIntent)
             {
+                var isStopLoss = placeIntent.Purpose == DCAnt2.Core.Domain.OrderPurpose.StopLoss;
+                var isExitOrder = placeIntent.Purpose == DCAnt2.Core.Domain.OrderPurpose.TakeProfit || isStopLoss;
+                
                 var parameters = new PlaceOrderRequestParameters
                 {
                     Account = _account,
                     Symbol = _symbol,
                     Side = placeIntent.Side == DCAnt2.Core.Domain.OrderSide.Buy ? TradingPlatform.BusinessLayer.Side.Buy : TradingPlatform.BusinessLayer.Side.Sell,
                     TimeInForce = TimeInForce.GTC,
-                    OrderTypeId = OrderType.Limit,
-                    Price = (double)placeIntent.Price.Value,
+                    OrderTypeId = isStopLoss ? OrderType.Stop : OrderType.Limit,
                     Quantity = (double)placeIntent.Quantity.Value,
                     Comment = placeIntent.OrderId.Value // ClientRequestId is Comment
                 };
+
+                if (isStopLoss)
+                    parameters.TriggerPrice = (double)placeIntent.Price.Value;
+                else
+                    parameters.Price = (double)placeIntent.Price.Value;
+                    
+                if (isExitOrder)
+                {
+                    parameters.AdditionalParameters = new List<SettingItem>
+                    {
+                        new SettingItemBoolean("Reduce Only", true)
+                    };
+                }
                 
                 // В Quantower API PlaceOrder асинхронный по природе (отправляет запрос),
                 // результат возвращается либо синхронно (ошибка валидации), либо через коллбеки
-                TradingPlatform.BusinessLayer.Core.Instance.PlaceOrder(parameters);
+                var result = TradingPlatform.BusinessLayer.Core.Instance.PlaceOrder(parameters);
+                _log($"[QuantowerAdapter] PlaceOrder result: {result.Status}, Message: {result.Message}");
+                
+                if (result.Status == TradingOperationResultStatus.Failure)
+                {
+                    _engineLoop.Enqueue(new RejectionMessage(new OrderRejected(placeIntent.OrderId, result.Message ?? "Synchronous rejection from Quantower API")));
+                }
             }
             else if (intent is CancelOrderIntent cancelIntent)
             {
@@ -115,19 +138,35 @@ public class QuantowerAdapter
         }
         else if (order.Status == OrderStatus.Filled || order.Status == OrderStatus.PartiallyFilled)
         {
-            var executionId = new ExecutionId("exec_" + order.Id);
-            var price = new DCAnt2.Core.Domain.Price((decimal)order.Price);
-            var qty = new Quantity((decimal)order.FilledQuantity);
-            var execution = new OrderExecuted(executionId, internalOrderId, price, qty);
-            
-            _engineLoop.Enqueue(new ExecutionMessage(execution));
+            try
+            {
+                var executionId = new ExecutionId("exec_" + order.Id);
+                var priceValue = double.IsNaN(order.Price) ? 0m : (decimal)order.Price;
+                var qtyValue = double.IsNaN(order.FilledQuantity) ? 0m : (decimal)order.FilledQuantity;
+                if (qtyValue <= 0) qtyValue = (decimal)order.TotalQuantity;
+                
+                var price = new DCAnt2.Core.Domain.Price(priceValue);
+                var qty = new Quantity(qtyValue);
+                var execution = new OrderExecuted(executionId, internalOrderId, price, qty);
+                
+                _engineLoop.Enqueue(new ExecutionMessage(execution));
+            }
+            catch (Exception ex)
+            {
+                _log($"[QuantowerAdapter] Error processing execution for order {order.Id}: {ex.Message}");
+            }
         }
     }
 
     public void HandleOrderHistoryAdded(OrderHistory order)
     {
+        _log($"[QuantowerAdapter] OrderHistoryAdded: Id={order.Id}, Status={order.Status}, Comment='{order.Comment}'");
         if (order.Account.Id != _account.Id || order.Symbol.Id != _symbol.Id) return;
-        if (string.IsNullOrEmpty(order.Comment)) return; 
+        if (string.IsNullOrEmpty(order.Comment)) 
+        {
+            _log($"[QuantowerAdapter] Ignoring OrderHistoryAdded because Comment is empty.");
+            return; 
+        }
         
         var internalOrderId = new InternalOrderId(order.Comment);
 
@@ -137,12 +176,27 @@ public class QuantowerAdapter
         }
         else if (order.Status == OrderStatus.Filled || order.Status == OrderStatus.PartiallyFilled)
         {
-            var executionId = new ExecutionId("exec_" + order.Id);
-            var price = new DCAnt2.Core.Domain.Price((decimal)order.Price);
-            var qty = new Quantity((decimal)order.FilledQuantity);
-            var execution = new OrderExecuted(executionId, internalOrderId, price, qty);
-            
-            _engineLoop.Enqueue(new ExecutionMessage(execution));
+            try
+            {
+                var executionId = new ExecutionId("exec_" + order.Id);
+                var priceValue = double.IsNaN(order.Price) ? 0m : (decimal)order.Price;
+                var qtyValue = double.IsNaN(order.FilledQuantity) ? 0m : (decimal)order.FilledQuantity;
+                
+                // If the exchange reports 0 filled quantity for a triggered Stop order,
+                // we might need to fake the execution quantity, but let's see.
+                // For now, if qtyValue <= 0, we can just use order.Quantity.
+                if (qtyValue <= 0) qtyValue = (decimal)order.TotalQuantity;
+                
+                var price = new DCAnt2.Core.Domain.Price(priceValue);
+                var qty = new Quantity(qtyValue);
+                var execution = new OrderExecuted(executionId, internalOrderId, price, qty);
+                
+                _engineLoop.Enqueue(new ExecutionMessage(execution));
+            }
+            catch (Exception ex)
+            {
+                _log($"[QuantowerAdapter] Error processing execution for order {order.Id}: {ex.Message}");
+            }
         }
     }
 

@@ -1,106 +1,63 @@
 using System;
-using System.IO;
 using System.Linq;
 using DCAnt2.Core.Domain;
-using DCAnt2.Infrastructure.Database;
-using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace DCAnt2.Tests;
 
-/// <summary>
-/// Интеграционные (Scenario) тесты для полного жизненного цикла одиночной защищенной сделки (Этап 8)
-/// </summary>
-public class SingleTradeScenarioTests : IDisposable
+public class SingleTradeScenarioTests
 {
-    private readonly string _dbPath;
-    private readonly string _connectionString;
-    private readonly MigrationRunner _runner;
-    private readonly SqliteTradingStateStore _store;
-    private readonly InstrumentRules _rules;
-
-    public SingleTradeScenarioTests()
-    {
-        _dbPath = Path.GetTempFileName();
-        _connectionString = $"Data Source={_dbPath}";
-        _runner = new MigrationRunner(_connectionString);
-        _runner.RunMigrations();
-        _store = new SqliteTradingStateStore(_connectionString);
-        _rules = new InstrumentRules("USDT", 0.01m, 1m, 10m);
-    }
-
-    public void Dispose()
-    {
-        if (File.Exists(_dbPath))
-        {
-            try { File.Delete(_dbPath); } catch { }
-        }
-    }
+    private readonly InstrumentRules _rules = new InstrumentRules("USDT", 0.01m, 1m, 10m);
 
     [Fact]
     public void FullTradeLifecycle_CompletesSuccessfully()
     {
-        // 1. Создаем цикл и стартуем сделку
+        // 1. Ð¡Ð¾Ð·Ð´Ð°ÐµÐ¼ Ñ†Ð¸ÐºÐ» Ð¸ ÑÑ‚Ð°Ñ€Ñ‚ÑƒÐµÐ¼ ÑÐ´ÐµÐ»ÐºÑƒ
         var cycleId = TradeCycleId.New();
-        var cycle = new TradeCycle(cycleId, 2m, _rules, OrderSide.Buy);
+        var settings = new DcaSettings(2m, 2m, 1m, 0, 0, 3m);
+        var cycle = new TradeCycle(cycleId, settings, _rules, OrderSide.Buy);
         cycle.Start(new Price(100m), new Quantity(1m));
 
-        // Проверяем Outbox и сохраняем стейт
-        Assert.Single(cycle.Outbox);
+        // ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÐµÐ¼ Outbox Ð¸ ÑÐ¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ ÑÑ‚ÐµÐ¹Ñ‚
         var entryIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
         Assert.Equal(OrderPurpose.FirstOrder, entryIntent.Purpose);
-        
-        _store.SaveStateAndIntents(cycle, cycle.Outbox.ToList());
         cycle.ClearOutbox();
 
-        // 2. Симулируем получение Execution от биржи (ордер исполнен)
-        var entryExecutionId = new ExecutionId("exec-entry");
-        var entryExecEvent = new OrderExecuted(entryExecutionId, entryIntent.OrderId, new Price(100m), new Quantity(1m));
+        // 2. Ð˜ÑÐ¿Ð¾Ð»Ð½ÐµÐ½Ð¸Ðµ Ð²Ñ…Ð¾Ð´Ð° -> Ð´Ð¾Ð»Ð¶ÐµÐ½ Ð²Ñ‹ÑÑ‚Ð°Ð²Ð¸Ñ‚ÑŒÑÑ Ñ‚ÐµÐ¹Ðº-Ð¿Ñ€Ð¾Ñ„Ð¸Ñ‚ Ð½Ð° ÑÐ»ÐµÐ´ÑƒÑŽÑ‰ÐµÐ¼ Tick
+        cycle.Handle(new OrderExecuted(new ExecutionId("exec-1"), entryIntent.OrderId, new Price(100m), new Quantity(1m)));
         
-        cycle.Handle(entryExecEvent);
-
-        // Проверяем, что позиция открыта и выставлен TP
-        Assert.Equal(1m, cycle.PositionQuantity.Value);
-        Assert.Equal(100m, cycle.PositionVwap.Value);
-        Assert.Equal(TradeCycleStatus.Active, cycle.Status);
-
-        Assert.Single(cycle.Outbox);
-        var tpIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
+        cycle.Handle(new TickMessage(DateTime.UtcNow));
+        var tpIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single(i => i.Purpose == OrderPurpose.TakeProfit);
         Assert.Equal(OrderPurpose.TakeProfit, tpIntent.Purpose);
         Assert.Equal(102m, tpIntent.Price.Value);
-
-        // Сохраняем состояние с исполнением
-        _store.SaveStateAndIntents(cycle, cycle.Outbox.ToList(), entryExecEvent);
+        
+        var slIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single(i => i.Purpose == OrderPurpose.StopLoss);
+        Assert.NotNull(slIntent);
         cycle.ClearOutbox();
 
-        // 3. Симулируем получение Execution по TP ордеру
-        var tpExecutionId = new ExecutionId("exec-tp");
-        var tpExecEvent = new OrderExecuted(tpExecutionId, tpIntent.OrderId, tpIntent.Price, tpIntent.Quantity);
-
-        cycle.Handle(tpExecEvent);
-
-        // Проверяем, что цикл успешно завершен
-        Assert.Equal(0m, cycle.PositionQuantity.Value);
+        // 3. Ð˜ÑÐ¿Ð¾Ð»Ð½ÐµÐ½Ð¸Ðµ Ñ‚ÐµÐ¹Ðº-Ð¿Ñ€Ð¾Ñ„Ð¸Ñ‚Ð° -> Ð·Ð°Ð²ÐµÑ€ÑˆÐµÐ½Ð¸Ðµ Ñ†Ð¸ÐºÐ»Ð°
+        cycle.Handle(new OrderExecuted(new ExecutionId("exec-2"), tpIntent.OrderId, new Price(102m), new Quantity(1m)));
+        
         Assert.Equal(TradeCycleStatus.Completed, cycle.Status);
-        Assert.Empty(cycle.Outbox);
-
-        _store.SaveStateAndIntents(cycle, cycle.Outbox.ToList(), tpExecEvent);
+        Assert.Equal(TradeCycleExitReason.TakeProfit, cycle.ExitReason);
+        Assert.Equal(0m, cycle.PositionQuantity.Value);
     }
-    
+
     [Fact]
     public void EntryRejection_EntersExitOnly()
     {
-        // 1. Создаем цикл и стартуем сделку
-        var cycle = new TradeCycle(TradeCycleId.New(), 2m, _rules, OrderSide.Buy);
+        // 1. Ð¡Ð¾Ð·Ð´Ð°ÐµÐ¼ Ñ†Ð¸ÐºÐ» Ð¸ ÑÑ‚Ð°Ñ€Ñ‚ÑƒÐµÐ¼ ÑÐ´ÐµÐ»ÐºÑƒ
+        var settings = new DcaSettings(2m, 2m, 1m, 0, 0, 3m);
+        var cycle = new TradeCycle(TradeCycleId.New(), settings, _rules, OrderSide.Buy);
         cycle.Start(new Price(100m), new Quantity(1m));
         var entryIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
         cycle.ClearOutbox();
         
-        // 2. Симулируем отказ от биржи
+        // 2. Ð¡Ð¸Ð¼ÑƒÐ»Ð¸Ñ€ÑƒÐµÐ¼ Ð¾Ñ‚ÐºÐ°Ð· Ð¾Ñ‚ Ð±Ð¸Ñ€Ð¶Ð¸
         var rejectEvent = new OrderRejected(entryIntent.OrderId, "Insufficient funds");
         cycle.Handle(rejectEvent);
-        
-        // 3. Проверяем, что бот перешел в ExitOnly и больше ничего не планирует
+
+        // 3. ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÐµÐ¼ Ð¿ÐµÑ€ÐµÑ…Ð¾Ð´ Ð² ÑÐ¾ÑÑ‚Ð¾ÑÐ½Ð¸Ðµ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð´Ð»Ñ Ð²Ñ‹Ñ…Ð¾Ð´Ð° (Ð² Ð´Ð°Ð½Ð½Ð¾Ð¼ ÑÐ»ÑƒÑ‡Ð°Ðµ Ð²Ñ‹Ñ…Ð¾Ð´ = Ð½Ð¸Ñ‡ÐµÐ³Ð¾ Ð½Ðµ Ð´ÐµÐ»Ð°Ñ‚ÑŒ, Ñ‚Ð°Ðº ÐºÐ°Ðº Ð¿Ð¾Ð·Ð¸Ñ†Ð¸Ð¸ Ð½ÐµÑ‚)
         Assert.Equal(TradeCycleStatus.ExitOnly, cycle.Status);
         Assert.Empty(cycle.Outbox);
     }

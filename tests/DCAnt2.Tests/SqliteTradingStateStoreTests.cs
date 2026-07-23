@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using Microsoft.Data.Sqlite;
@@ -37,7 +37,8 @@ public class SqliteTradingStateStoreTests : IDisposable
     {
         // Arrange
         var rules = new InstrumentRules("USDT", 0.01m, 1m, 10m);
-        var cycle = new TradeCycle(TradeCycleId.New(), 2m, rules, OrderSide.Buy);
+        var settings = new DcaSettings(2m, 2m, 1m, 1, 1, 3m);
+        var cycle = new TradeCycle(TradeCycleId.New(), settings, rules, OrderSide.Buy);
         cycle.Start(new Price(100m), new Quantity(1m));
 
         var intents = cycle.Outbox.ToList();
@@ -65,7 +66,8 @@ public class SqliteTradingStateStoreTests : IDisposable
     {
         // Arrange
         var rules = new InstrumentRules("USDT", 0.01m, 1m, 10m);
-        var cycle = new TradeCycle(TradeCycleId.New(), 2m, rules, OrderSide.Buy);
+        var settings = new DcaSettings(2m, 2m, 1m, 1, 1, 3m);
+        var cycle = new TradeCycle(TradeCycleId.New(), settings, rules, OrderSide.Buy);
         cycle.Start(new Price(100m), new Quantity(1m));
         
         var intents = cycle.Outbox.ToList();
@@ -98,7 +100,8 @@ public class SqliteTradingStateStoreTests : IDisposable
     {
         // Arrange
         var rules = new InstrumentRules("USDT", 0.01m, 1m, 10m);
-        var cycle = new TradeCycle(TradeCycleId.New(), 2m, rules, OrderSide.Buy);
+        var settings = new DcaSettings(2m, 2m, 1m, 1, 1, 3m);
+        var cycle = new TradeCycle(TradeCycleId.New(), settings, rules, OrderSide.Buy);
         cycle.Start(new Price(100m), new Quantity(1m));
         var intents = cycle.Outbox.ToList();
         var exec = new OrderExecuted(new ExecutionId("exec-xyz"), intents.OfType<PlaceOrderIntent>().First().OrderId, new Price(100), new Quantity(1));
@@ -109,5 +112,55 @@ public class SqliteTradingStateStoreTests : IDisposable
         _store.SaveStateAndIntents(cycle, intents, exec);
 
         Assert.True(_store.IsExecutionProcessed("exec-xyz"));
+    }
+
+    [Fact]
+    public void LoadActiveCycle_RestoresCompleteState()
+    {
+        var dbPath = $"test_{Guid.NewGuid()}.db";
+        var connStr = $"Data Source={dbPath}";
+        var runner = new MigrationRunner(connStr);
+        runner.RunMigrations();
+
+        var store = new SqliteTradingStateStore(connStr);
+        var rules = new InstrumentRules("USDT", 0.01m, 1m, 10m);
+        var settings = new DcaSettings(2m, 2m, 1.5m, 5, 2, 3m);
+        
+        var originalCycle = new TradeCycle(TradeCycleId.New(), settings, rules, OrderSide.Buy);
+        originalCycle.Start(new Price(100m), new Quantity(1m));
+        
+        var intents = originalCycle.Outbox.ToList();
+        originalCycle.ClearOutbox();
+        
+        var firstIntent = intents.OfType<PlaceOrderIntent>().First(i => i.Purpose == OrderPurpose.FirstOrder);
+        
+        // Fill first order
+        var exec = new OrderExecuted(new ExecutionId("e1"), firstIntent.OrderId, new Price(100m), new Quantity(1m));
+        originalCycle.Handle(exec);
+        
+        // Save
+        store.SaveStateAndIntents(originalCycle, intents, exec);
+        originalCycle.ClearOutbox();
+
+        // Restore
+        var store2 = new SqliteTradingStateStore(connStr);
+        var restoredCycle = store2.LoadActiveCycle(rules, settings);
+
+        Assert.NotNull(restoredCycle);
+        Assert.Equal(originalCycle.Id.Value, restoredCycle.Id.Value);
+        Assert.Equal(1m, restoredCycle.PositionQuantity.Value);
+        Assert.Equal(100m, restoredCycle.PositionVwap.Value);
+        
+        var snapshot1 = originalCycle.GetSnapshot();
+        var snapshot2 = restoredCycle.GetSnapshot();
+        
+        Assert.Equal(snapshot1.GeneratedGridLevels, snapshot2.GeneratedGridLevels);
+        Assert.Equal(snapshot1.ActiveGridOrdersCount, snapshot2.ActiveGridOrdersCount);
+        
+        // Clean up
+        if (System.IO.File.Exists(dbPath))
+        {
+            try { System.IO.File.Delete(dbPath); } catch { /* Ignore */ }
+        }
     }
 }

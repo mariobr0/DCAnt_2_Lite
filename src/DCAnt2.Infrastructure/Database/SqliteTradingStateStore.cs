@@ -24,21 +24,24 @@ public class SqliteTradingStateStore : ITradingStateStore
         try
         {
             // Upsert TradeCycle
+            var snapshotJson = JsonSerializer.Serialize(cycle.GetSnapshot());
             connection.Execute(@"
-                INSERT INTO TradeCycles (Id, Status, TotalVolume, Vwap, TotalCommission)
-                VALUES (@Id, @Status, @TotalVolume, @Vwap, @TotalCommission)
+                INSERT INTO TradeCycles (Id, Status, TotalVolume, Vwap, TotalCommission, StateSnapshot)
+                VALUES (@Id, @Status, @TotalVolume, @Vwap, @TotalCommission, @StateSnapshot)
                 ON CONFLICT(Id) DO UPDATE SET
                     Status = @Status,
                     TotalVolume = @TotalVolume,
                     Vwap = @Vwap,
-                    TotalCommission = @TotalCommission;
+                    TotalCommission = @TotalCommission,
+                    StateSnapshot = @StateSnapshot;
             ", new
             {
                 Id = cycle.Id.Value,
                 Status = cycle.Status.ToString(),
                 TotalVolume = cycle.PositionQuantity.Value.ToString(),
                 Vwap = cycle.PositionVwap.Value.ToString(),
-                TotalCommission = "0"
+                TotalCommission = "0",
+                StateSnapshot = snapshotJson
             }, transaction);
 
             foreach (var intent in intents)
@@ -117,9 +120,51 @@ public class SqliteTradingStateStore : ITradingStateStore
         }
     }
 
-    public TradeCycle? LoadActiveCycle()
+    public TradeCycle? LoadActiveCycle(InstrumentRules rules, DcaSettings settings)
     {
-        throw new NotImplementedException("To be implemented in stage 9 (Recovery)");
+        using var connection = new SqliteConnection(_connectionString);
+        
+        var cycleRow = connection.QueryFirstOrDefault(@"
+            SELECT Id, Status, TotalVolume, Vwap, StateSnapshot 
+            FROM TradeCycles 
+            WHERE Status != 'Completed'
+            ORDER BY rowid DESC LIMIT 1
+        ");
+
+        if (cycleRow == null) return null;
+
+        var snapshot = JsonSerializer.Deserialize<TradeCycleSnapshot>((string)cycleRow.StateSnapshot);
+        if (snapshot == null) return null;
+
+        var cycleId = new TradeCycleId((string)cycleRow.Id);
+        // Assuming OrderSide Buy for now, or we can add it to snapshot later if we support shorting
+        var cycle = new TradeCycle(cycleId, settings, rules, OrderSide.Buy);
+        
+        cycle.RestoreSnapshot(snapshot);
+        
+        // Restore Position
+        cycle.RestorePosition(
+            new Quantity(decimal.Parse((string)cycleRow.TotalVolume)),
+            new Price(decimal.Parse((string)cycleRow.Vwap))
+        );
+
+        // Load active managed orders
+        var managedOrders = connection.Query(@"
+            SELECT InternalOrderId, Type 
+            FROM ManagedOrders 
+            WHERE TradeCycleId = @Id AND Status IN ('Pending', 'Filled')
+        ", new { Id = cycleRow.Id });
+
+        foreach (var row in managedOrders)
+        {
+            var internalId = new InternalOrderId((string)row.InternalOrderId);
+            if (Enum.TryParse<OrderPurpose>((string)row.Type, out var purpose))
+            {
+                cycle.RestoreOrder(internalId, purpose);
+            }
+        }
+
+        return cycle;
     }
 
     public bool IsExecutionProcessed(string executionId)

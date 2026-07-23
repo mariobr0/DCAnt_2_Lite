@@ -16,6 +16,11 @@ public record ExecutionMessage(OrderExecuted Execution) : EngineMessage;
 public record RejectionMessage(OrderRejected Rejection) : EngineMessage;
 
 /// <summary>
+/// Тик времени
+/// </summary>
+public record TickMessage(DateTime Timestamp) : EngineMessage;
+
+/// <summary>
 /// Новая рыночная цена
 /// </summary>
 public record MarketQuoteMessage(Price Price) : EngineMessage;
@@ -24,3 +29,8 @@ public record MarketQuoteMessage(Price Price) : EngineMessage;
 /// Команда на остановку цикла
 /// </summary>
 public record ShutdownMessage() : EngineMessage;
+
+/// <summary>
+/// Команда на старт нового цикла в непрерывном режиме
+/// </summary>
+public record StartNewCycleMessage() : EngineMessage;
