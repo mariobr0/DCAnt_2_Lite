@@ -3,7 +3,7 @@ namespace DCAnt2.Core.Domain;
 public abstract record TradeEvent;
 
 public record OrderExecuted(
-    string ExecutionId,
+    ExecutionId ExecutionId,
     InternalOrderId OrderId, 
     Price ExecutedPrice, 
     Quantity ExecutedQuantity) : TradeEvent;
