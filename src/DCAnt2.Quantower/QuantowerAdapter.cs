@@ -104,7 +104,7 @@ public class QuantowerAdapter
     /// </summary>
     public void HandleOrderUpdated(Order order)
     {
-        if (order.Account != _account || order.Symbol != _symbol) return;
+        if (order.Account.Id != _account.Id || order.Symbol.Id != _symbol.Id) return;
         if (string.IsNullOrEmpty(order.Comment)) return; // Не наш ордер (нет ClientRequestId)
         
         var internalOrderId = new InternalOrderId(order.Comment);
@@ -112,6 +112,37 @@ public class QuantowerAdapter
         if (order.Status == OrderStatus.Cancelled || order.Status == OrderStatus.Refused)
         {
             _engineLoop.Enqueue(new RejectionMessage(new OrderRejected(internalOrderId, "Cancelled or Refused")));
+        }
+        else if (order.Status == OrderStatus.Filled || order.Status == OrderStatus.PartiallyFilled)
+        {
+            var executionId = new ExecutionId("exec_" + order.Id);
+            var price = new DCAnt2.Core.Domain.Price((decimal)order.Price);
+            var qty = new Quantity((decimal)order.FilledQuantity);
+            var execution = new OrderExecuted(executionId, internalOrderId, price, qty);
+            
+            _engineLoop.Enqueue(new ExecutionMessage(execution));
+        }
+    }
+
+    public void HandleOrderHistoryAdded(OrderHistory order)
+    {
+        if (order.Account.Id != _account.Id || order.Symbol.Id != _symbol.Id) return;
+        if (string.IsNullOrEmpty(order.Comment)) return; 
+        
+        var internalOrderId = new InternalOrderId(order.Comment);
+
+        if (order.Status == OrderStatus.Cancelled || order.Status == OrderStatus.Refused)
+        {
+            _engineLoop.Enqueue(new RejectionMessage(new OrderRejected(internalOrderId, "Cancelled or Refused")));
+        }
+        else if (order.Status == OrderStatus.Filled || order.Status == OrderStatus.PartiallyFilled)
+        {
+            var executionId = new ExecutionId("exec_" + order.Id);
+            var price = new DCAnt2.Core.Domain.Price((decimal)order.Price);
+            var qty = new Quantity((decimal)order.FilledQuantity);
+            var execution = new OrderExecuted(executionId, internalOrderId, price, qty);
+            
+            _engineLoop.Enqueue(new ExecutionMessage(execution));
         }
     }
 
