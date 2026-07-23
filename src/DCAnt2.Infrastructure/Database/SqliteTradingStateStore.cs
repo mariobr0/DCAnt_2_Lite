@@ -94,7 +94,7 @@ public class SqliteTradingStateStore : ITradingStateStore
                     VALUES (@ExecutionId, @InternalOrderId, @TradeCycleId, @Price, @Quantity, @Commission, @Timestamp);
                 ", new
                 {
-                    ExecutionId = execution.ExecutionId,
+                    ExecutionId = execution.ExecutionId.Value,
                     InternalOrderId = execution.OrderId.Value,
                     TradeCycleId = cycle.Id.Value,
                     Price = execution.ExecutedPrice.Value.ToString(),
