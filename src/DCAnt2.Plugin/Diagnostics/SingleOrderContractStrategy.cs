@@ -65,7 +65,13 @@ public class SingleOrderContractStrategy : Strategy
         {
             ValidateCommonInputs();
             GenerateRunId();
-            _logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), $"DCAnt2_Contracts_{_runId}.log");
+            
+            var logsDir = @"C:\Users\dzam\Desktop\Code\QuantowerCode\DCAnt_2_Lite\logs";
+            if (!Directory.Exists(logsDir))
+            {
+                Directory.CreateDirectory(logsDir);
+            }
+            _logPath = Path.Combine(logsDir, $"DCAnt2_Contracts_{_runId}.log");
 
             if (Scenario == ContractTestScenario.PlaceAndObserve)
             {
