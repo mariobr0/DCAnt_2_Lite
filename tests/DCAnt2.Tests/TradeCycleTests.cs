@@ -21,6 +21,22 @@ public class TradeCycleTests
     }
 
     [Fact]
+    public void Constructor_WithNullId_ThrowsArgumentNullException()
+    {
+        var ex = Assert.Throws<ArgumentNullException>(() => new TradeCycle(null!, TradeDirection.Long));
+        Assert.Equal("id", ex.ParamName);
+    }
+
+    [Fact]
+    public void RegisterOrder_WithNullId_ThrowsArgumentNullException()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        
+        var ex = Assert.Throws<ArgumentNullException>(() => cycle.RegisterOrder(null!, OrderPurpose.TakeProfit));
+        Assert.Equal("id", ex.ParamName);
+    }
+
+    [Fact]
     public void RegisterOrder_RegistersOwnership()
     {
         var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Short);
@@ -70,12 +86,30 @@ public class TradeCycleTests
     }
 
     [Fact]
+    public void OwnsOrder_WithNullId_ThrowsArgumentNullException()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        
+        var ex = Assert.Throws<ArgumentNullException>(() => cycle.OwnsOrder(null!));
+        Assert.Equal("id", ex.ParamName);
+    }
+
+    [Fact]
     public void TryGetOrderPurpose_ForUnknownOrder_ReturnsFalse()
     {
         var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
         var orderId = InternalOrderId.New();
 
         Assert.False(cycle.TryGetOrderPurpose(orderId, out _));
+    }
+
+    [Fact]
+    public void TryGetOrderPurpose_WithNullId_ThrowsArgumentNullException()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        
+        var ex = Assert.Throws<ArgumentNullException>(() => cycle.TryGetOrderPurpose(null!, out _));
+        Assert.Equal("id", ex.ParamName);
     }
 
     [Fact]

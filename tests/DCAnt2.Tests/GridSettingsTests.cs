@@ -7,15 +7,15 @@ namespace DCAnt2.Tests;
 public class GridSettingsTests
 {
     [Fact]
-    public void Constructor_WhenFirstOrderVolumeExceedsMaxCapital_ThrowsArgumentException()
+    public void Constructor_WhenFirstOrderVolumeExceedsMaxCapital_ThrowsArgumentOutOfRangeException()
     {
         var firstOrderVol = new Money(150m);
         var maxCap = new Money(100m);
         
-        var ex = Assert.Throws<ArgumentException>(() => 
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => 
             new GridSettings(firstOrderVol, maxCap, 5, 1m, 1m, 1m));
             
-        Assert.Contains("exceed MaxCapital", ex.Message);
+        Assert.Equal("firstOrderVolume", ex.ParamName);
     }
 
     [Fact]
@@ -28,5 +28,17 @@ public class GridSettingsTests
             
         Assert.Equal(100m, settings.FirstOrderVolume.Value);
         Assert.Equal(100m, settings.MaxCapital.Value);
+    }
+
+    [Fact]
+    public void Constructor_WhenMaxLevelsExceeds1000_ThrowsArgumentOutOfRangeException()
+    {
+        var firstOrderVol = new Money(100m);
+        var maxCap = new Money(1000m);
+        
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => 
+            new GridSettings(firstOrderVol, maxCap, 1001, 1m, 1m, 1m));
+            
+        Assert.Equal("maxLevels", ex.ParamName);
     }
 }

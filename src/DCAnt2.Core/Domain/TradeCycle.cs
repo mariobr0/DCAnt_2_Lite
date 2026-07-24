@@ -19,12 +19,14 @@ public class TradeCycle
     public Quantity PositionQuantity { get; private set; }
     public Price PositionVwap { get; private set; }
     
-    private readonly Dictionary<InternalOrderId, OrderPurpose> _activeOrders = new();
+    private readonly Dictionary<InternalOrderId, OrderPurpose> _registeredOrders = new();
     
-    public int RegisteredOrderCount => _activeOrders.Count;
+    public int RegisteredOrderCount => _registeredOrders.Count;
 
     public TradeCycle(TradeCycleId id, TradeDirection direction)
     {
+        ArgumentNullException.ThrowIfNull(id);
+
         Id = id;
         Direction = direction;
         Status = TradeCycleStatus.Active;
@@ -34,7 +36,9 @@ public class TradeCycle
     
     public void RegisterOrder(InternalOrderId id, OrderPurpose purpose)
     {
-        if (!_activeOrders.TryAdd(id, purpose))
+        ArgumentNullException.ThrowIfNull(id);
+
+        if (!_registeredOrders.TryAdd(id, purpose))
         {
             throw new InvalidOperationException($"Order {id} is already registered.");
         }
@@ -76,11 +80,13 @@ public class TradeCycle
 
     public bool OwnsOrder(InternalOrderId id)
     {
-        return _activeOrders.ContainsKey(id);
+        ArgumentNullException.ThrowIfNull(id);
+        return _registeredOrders.ContainsKey(id);
     }
 
     public bool TryGetOrderPurpose(InternalOrderId id, out OrderPurpose purpose)
     {
-        return _activeOrders.TryGetValue(id, out purpose);
+        ArgumentNullException.ThrowIfNull(id);
+        return _registeredOrders.TryGetValue(id, out purpose);
     }
 }

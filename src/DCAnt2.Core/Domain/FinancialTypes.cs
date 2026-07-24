@@ -17,7 +17,7 @@ public readonly record struct Money
     public static Money operator +(Money a, Money b) => new(a.Value + b.Value);
     public static Money operator -(Money a, Money b) => new(a.Value - b.Value);
     
-    public override string ToString() => Value.ToString("0.########");
+    public override string ToString() => Value.ToString("0.########", System.Globalization.CultureInfo.InvariantCulture);
 }
 
 public readonly record struct Quantity
@@ -35,7 +35,7 @@ public readonly record struct Quantity
     public static Quantity operator +(Quantity a, Quantity b) => new(a.Value + b.Value);
     public static Quantity operator -(Quantity a, Quantity b) => new(a.Value - b.Value);
     
-    public override string ToString() => Value.ToString("0.########");
+    public override string ToString() => Value.ToString("0.########", System.Globalization.CultureInfo.InvariantCulture);
 }
 
 public readonly record struct Price
@@ -50,5 +50,5 @@ public readonly record struct Price
         Value = value;
     }
     
-    public override string ToString() => Value.ToString("0.########");
+    public override string ToString() => Value.ToString("0.########", System.Globalization.CultureInfo.InvariantCulture);
 }
