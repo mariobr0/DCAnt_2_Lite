@@ -42,6 +42,7 @@ public class SingleOrderContractStrategy : Strategy
     private string _runId = "";
     private string _targetMarker = "";
     private string _logPath = "";
+    private string? _observedOrderId;
     private readonly object _logLock = new();
 
     private volatile bool _observationFinished;
@@ -117,7 +118,7 @@ public class SingleOrderContractStrategy : Strategy
         }
         catch (Exception ex)
         {
-            WriteLog($"ERROR: {ex}");
+            WriteLogLine($"[{DateTime.UtcNow:O}] [{_runId}] [{_targetMarker}] [{Scenario}] Error={Quote(ex.ToString())}");
             Stop();
         }
     }
@@ -188,6 +189,9 @@ public class SingleOrderContractStrategy : Strategy
     {
         if (_stopping) return;
         if (!IsMatchingOrder(order)) return;
+        
+        _observedOrderId = order.Id;
+        
         var line = BuildSnapshotLine(source, "OrderState", order: order);
         WriteLogLine(line);
     }
@@ -196,9 +200,14 @@ public class SingleOrderContractStrategy : Strategy
     {
         if (_stopping) return;
         if (orderHistory.Account.Id != TestAccount?.Id || orderHistory.Symbol.Id != TestSymbol?.Id) return;
-        if (orderHistory.Comment != _targetMarker) return;
         
-        var line = BuildSnapshotLine("OrdersHistoryAdded", "OrderHistoryState", orderHistory: orderHistory);
+        bool markerMatches = orderHistory.Comment == _targetMarker;
+        bool orderIdMatches = !string.IsNullOrWhiteSpace(_observedOrderId) && orderHistory.Id == _observedOrderId;
+
+        if (!markerMatches && !orderIdMatches) return;
+        
+        string extra = $"MarkerMatches={markerMatches} OrderIdMatches={orderIdMatches}";
+        var line = BuildSnapshotLine("OrdersHistoryAdded", "OrderHistoryState", orderHistory: orderHistory, extraInfo: extra);
         WriteLogLine(line);
     }
 
@@ -249,7 +258,7 @@ public class SingleOrderContractStrategy : Strategy
         var result = global::TradingPlatform.BusinessLayer.Core.Instance.PlaceOrder(request);
         watch.Stop();
 
-        WriteLog($"PlaceOrder API result: Status={result.Status}, Message={result.Message}, ReturnedOrderId={result.OrderId}, ElapsedMs={watch.ElapsedMilliseconds}");
+        WriteLog($"PlaceOrder API result: Status={result.Status}, Message={Quote(result.Message)}, ReturnedOrderId={Quote(result.OrderId)}, ElapsedMs={watch.ElapsedMilliseconds}");
         WriteLogLine(BuildSnapshotLine("Strategy", "AfterApiCall"));
     }
 
@@ -279,7 +288,7 @@ public class SingleOrderContractStrategy : Strategy
         var result = global::TradingPlatform.BusinessLayer.Core.Instance.CancelOrder(request);
         watch.Stop();
 
-        WriteLog($"CancelOrder API result: Status={result.Status}, Message={result.Message}, ElapsedMs={watch.ElapsedMilliseconds}");
+        WriteLog($"CancelOrder API result: Status={result.Status}, Message={Quote(result.Message)}, ElapsedMs={watch.ElapsedMilliseconds}");
         WriteLogLine(BuildSnapshotLine("Strategy", "AfterApiCall", order: targetOrder));
     }
 
@@ -341,6 +350,20 @@ public class SingleOrderContractStrategy : Strategy
         _targetMarker = $"qtct_{DateTime.UtcNow:ddMMyy}_{Guid.NewGuid().ToString("N").Substring(0, 8)}";
     }
 
+    private static string Quote(string? value)
+    {
+        if (value is null)
+        {
+            return "Unknown";
+        }
+        var escaped = value
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\r", "\\r")
+            .Replace("\n", "\\n");
+        return $"\"{escaped}\"";
+    }
+
     private string BuildSnapshotLine(string source, string eventName, Order? order = null, Position? position = null, OrderHistory? orderHistory = null, string extraInfo = "")
     {
         position ??= ReadPosition();
@@ -384,14 +407,14 @@ public class SingleOrderContractStrategy : Strategy
         var oAvgP = order != null ? order.AverageFillPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : (orderHistory != null ? orderHistory.AverageFillPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown");
 
         var threadId = Thread.CurrentThread.ManagedThreadId;
-        var accName = TestAccount != null ? $"\"{TestAccount.Name}\"" : "Unknown";
+        var accName = TestAccount != null ? Quote(TestAccount.Name) : "Unknown";
         var obsFin = _observationFinished ? " ObservationFinished=True" : "";
 
         return $"[{ts}] [{_runId}] [{_targetMarker}] [{Scenario}] [{source}] [{eventName}] " +
-               $"AccountId=\"{TestAccount?.Id}\" AccountName={accName} SymbolId={TestSymbol?.Id} " +
+               $"AccountId={Quote(TestAccount?.Id)} AccountName={accName} SymbolId={Quote(TestSymbol?.Id)} " +
                $"ActiveOrdersCount={activeOrdersCount} ActiveTestOrdersCount={activeTestOrdersCount} MatchingOrdersCount={matchingOrdersCount} " +
                $"PositionState={positionState} PositionQty={pQty} PositionOpenPrice={pPrice} " +
-               $"OrderId={oId} Status={oStatus} Comment=\"{oComment}\" " +
+               $"OrderId={Quote(oId)} Status={Quote(oStatus)} Comment={Quote(oComment)} " +
                $"Price={oPrice} TotalQty={oTQty} FilledQty={oFQty} AverageFillPrice={oAvgP}{obsFin}" +
                (string.IsNullOrEmpty(extraInfo) ? "" : $" {extraInfo}") +
                $" ThreadId={threadId}";
