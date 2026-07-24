@@ -1,6 +1,5 @@
 ---
-name: complexity-control
-trigger: always
+trigger: always_on
 ---
 
 # Контроль сложности проекта

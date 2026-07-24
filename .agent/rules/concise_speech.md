@@ -1,6 +1,5 @@
 ---
-name: concise-speech
-trigger: always
+trigger: always_on
 ---
 
 # Естественное и понятное общение
