@@ -1,4 +1,4 @@
-﻿# Quantower Single Order Contracts
+# Quantower Single Order Contracts
 
 ## Overview
 This document tracks the verified behavior of Quantower API specifically related to placing, modifying, and canceling single orders, as well as the visibility of these orders in the `Core.Orders` and `Core.OrdersHistory` collections and related callbacks.
@@ -113,6 +113,16 @@ Based on the validated contracts, replacing a TakeProfit (TP) or StopLoss (SL) m
 5. **Terminal Confirmation**: Await `OrdersHistoryAdded` to confirm `Cancelled` (if available).
 6. **Replacement**: Only after the above confirmations is it safe to allow `PlaceOrder` for the replacement.
 
+## Cross-run ordering observation
+
+Order-state and position callbacks were observed in different orders across test runs.
+
+In one run, the terminal order state preceded `PositionAdded`.
+In another Binance Futures run, `PositionEvent` preceded the first observed `Filled` order callback by approximately 4.34 ms.
+
+**Architectural consequence:**
+Production logic must not require a fixed ordering between order and position callbacks. The system must treat order state and position snapshots as independent observations and reconcile them if they temporarily diverge.
+
 ## Additional observations
 - `OrdersHistoryAdded` was observed for `Status=Opened` with `FilledQty=0`.
 - Therefore, `OrdersHistoryAdded` must not be interpreted as a financial execution solely from the event name.
@@ -185,10 +195,243 @@ Based on the validated contracts, replacing a TakeProfit (TP) or StopLoss (SL) m
 - [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
 
 ### QT-DUP-001: Event duplication
-**Status:** NotObservedInThisRun (Inconclusive)
-**Observation:** Multi-source notifications (OrderAdded/OrdersHistoryAdded) were observed, but exact same-source duplicates were not observed in this run.
-**Conclusion:** Absence of exact duplicates in one run does not prove they are impossible.
-**Architectural consequence:** Retain idempotency protection.
+**Status:** Confirmed for duplicate order-state delivery
+**Observation:** In a Binance Futures run, after the first `OrderEvent/Filled` callback (`NewStateChange`), a second identical `OrderEvent/Filled` callback arrived, followed by `OrdersHistoryAdded/Filled`. Both subsequent callbacks were correctly classified as `RepeatedStateNotification`.
+**Conclusion:** A single executed order can generate multiple `Filled` callbacks.
+**Architectural consequence:** Retain idempotency protection. Multiple `Filled` notifications must not be treated as multiple financial executions. Baseline and last-observed states must filter out these repetitions.
 **References**:
-- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
-- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
+- [run_260724_180714_e6c0](runs/2026-07-24_prepare-open-position_run_260724_180714_e6c0.md)
+
+### QT-STRATEGY-RESTART-001: Active order visibility after Strategy restart
+
+**Status:** Confirmed for the tested environment
+
+**Observation:**
+
+After stopping `PrepareActiveOrder` and starting a new `ObserveRecovery` instance, the existing order was present in the initial snapshot:
+
+- OrderPresentInActiveCollection: True
+- OrderId: d502dd3a-32d7-4bb6-b65e-0f477d7be7b7
+- Status: Opened
+- Comment: qtct_240726_d0a29466
+- OrderPrice: 0.076
+- OrderTotalQuantity: 10
+- FilledQuantity: 0
+
+The observed OrderId and OrderPrice matched their expected values.
+
+**Conclusion:**
+
+For the tested environment, restarting the diagnostic Strategy did not lose the active order. The order was available as a current snapshot immediately when the new Strategy instance started.
+
+**Architectural consequence:**
+
+An order found in the initial recovery snapshot must be treated as existing external state, not as a new order event.
+
+**References**:
+- [Evidence Log](evidence/2026-07-24_observe-recovery-cleanup_run_260724_154648_866a.log)
+
+### QT-RECOVERY-POS-001: Position visibility after Strategy and Quantower restart
+
+**Status:** Confirmed for the tested environment
+
+**Observation:**
+After both stopping the strategy (Scenario D) and a full Quantower restart with connection recovery (Scenario E), the existing Binance Futures position was immediately available in the initial `ObserveRecovery` snapshot:
+- PositionState: Open
+- PositionQuantity: 200
+- PositionOpenPrice: 0.0458
+- Classification: CurrentSnapshot
+
+No additional position callback was required for the Strategy to observe the current position.
+The terminal restart test does not establish exactly when the position became available during terminal startup because `ObserveRecovery` was started after the connection had reached `Connected` state.
+
+**Conclusion:**
+For the tested environment, an existing open position is available as a current snapshot immediately when the new Strategy instance starts, regardless of whether the strategy or the entire terminal was restarted.
+The startup position snapshot is existing external state and must not be interpreted as a new fill.
+
+**Architectural consequence:**
+An open position found in the initial recovery snapshot must be treated as the absolute current state. EngineLoop must be able to adopt this position gracefully.
+
+**References**:
+- [run_260724_180912_c98e](runs/2026-07-24_observe-recovery_strategy-restart-open-position_run_260724_180912_c98e.md)
+- [run_260724_181340_5fb8](runs/2026-07-24_observe-recovery_terminal-restart-open-position_run_260724_181340_5fb8.md)
+- [Evidence Log (Strategy)](evidence/2026-07-24_observe-recovery_strategy-restart-open-position_run_260724_180912_c98e.log)
+- [Evidence Log (Terminal)](evidence/2026-07-24_observe-recovery_terminal-restart-open-position_run_260724_181340_5fb8.log)
+
+### QT-RECOVERY-POS-002: Preservation of position quantity and open price
+
+**Status:** Confirmed for the tested run
+
+**Observation:**
+The preparation evidence before restart contained:
+- PositionQuantity: 200
+- PositionOpenPrice: 0.0458
+
+The initial snapshot after restart (both Strategy and Terminal) contained the exact same values.
+
+**Limitation:**
+ExpectedPositionQuantity and ExpectedPositionOpenPrice were not passed to `ObserveRecovery`. Equality was established by comparing the raw preparation and recovery logs rather than built-in comparison fields.
+
+**Architectural consequence:**
+The recovered position snapshot must be treated as the absolute current state. It replaces a stale local snapshot and must not be added to it.
+
+**References**:
+- [run_260724_180912_c98e](runs/2026-07-24_observe-recovery_strategy-restart-open-position_run_260724_180912_c98e.md)
+- [run_260724_181340_5fb8](runs/2026-07-24_observe-recovery_terminal-restart-open-position_run_260724_181340_5fb8.md)
+- [Evidence Log (Strategy)](evidence/2026-07-24_observe-recovery_strategy-restart-open-position_run_260724_180912_c98e.log)
+- [Evidence Log (Terminal)](evidence/2026-07-24_observe-recovery_terminal-restart-open-position_run_260724_181340_5fb8.log)
+
+
+### QT-STRATEGY-RESTART-002: Repeated callbacks after Strategy restart
+
+**Status:** Inconclusive
+
+**Observation:**
+
+No order or order-history callbacks were observed between the initial snapshot and `OnStop` during this run.
+
+**Conclusion:**
+
+The active order was available through the startup snapshot, but no repeated callback was observed in this particular run.
+
+**Limitations:**
+
+Absence of a repeated callback in one run does not prove that such callbacks cannot occur.
+
+**Architectural consequence:**
+
+The system must still be prepared to handle repeated callbacks if they occur.
+
+**References**:
+- [Evidence Log](evidence/2026-07-24_observe-recovery_strategy-restart-active-order_run_260724_154349_d031.log)
+
+### QT-CONNECTION-001: Active order state during reconnect
+
+**Status:** Confirmed for the tested environment
+
+**Observation:**
+During the `Connecting` phase, the order briefly disappeared from the active collection (`OrderPresentInActiveCollection=False`). Once `Connected`, it became visible again (`OrderPresentInActiveCollection=True`) with its original parameters.
+
+**Conclusion:**
+Temporary unavailability of an order during a connection drop/reconnect must not be interpreted as a `Cancelled` state or a permanent loss of the order.
+
+**Architectural consequence:**
+The system must tolerate temporary order disappearance during reconnects. Do not automatically issue cancellation or replacement logic if an order vanishes while the connection is not fully established and stable.
+
+**References**:
+- [run_260724_172730_7709](runs/2026-07-24_observe-recovery_reconnect-active-order-binance_run_260724_172730_7709.md)
+- [Evidence Log](evidence/2026-07-24_observe-recovery_reconnect-binance_run_260724_172730_7709.log)
+
+### QT-CONNECTION-002: Preservation of active-order fields after reconnect
+
+**Status:** Confirmed for the tested run
+
+**Observation:**
+The following values matched exactly before and after the reconnect:
+- OrderId
+- Comment
+- OrderPrice
+- OrderTotalQuantity
+- Status
+- FilledQuantity
+
+**Conclusion:**
+For the tested Binance Futures connection, order parameters including diagnostic `TargetMarker` (Comment) survive a reconnect and are accurately restored.
+
+**Limitations:**
+ExpectedOrderPrice and ExpectedOrderTotalQuantity were verified via log comparison, not built-in matches.
+
+**Architectural consequence:**
+The recovered OrderId and Comment are suitable correlation candidates for reconciliation after a reconnect.
+
+**References**:
+- [run_260724_172730_7709](runs/2026-07-24_observe-recovery_reconnect-active-order-binance_run_260724_172730_7709.md)
+- [Evidence Log](evidence/2026-07-24_observe-recovery_reconnect-binance_run_260724_172730_7709.log)
+
+### QT-TERMINAL-RESTART-001: Active order recovery after Quantower restart
+
+**Status:** Confirmed for the tested environment
+
+**Environment:**
+- Quantower connector: Binance USDT-M Futures
+- Symbol: ESPORTSUSDT
+- Account type: Live
+
+**Observation:**
+Before terminal restart, the active order had:
+- OrderId: 1854741719
+- Comment: qtct_240726_2d8ef1ca
+- Status: Opened
+- OrderPrice: 0.039
+- OrderTotalQuantity: 300
+- FilledQuantity: 0
+
+After completely restarting Quantower and starting a new ObserveRecovery Strategy instance, the same order was available in the initial snapshot with the same values.
+
+**Conclusion:**
+For the tested Binance Futures connection, the active external order was recoverable through Quantower after a full terminal restart.
+The recovered order was observed as CurrentSnapshot and was not treated as a new order event.
+
+**Architectural consequence:**
+Initial Core.Orders state after terminal startup must be reconciled as existing external state. It must not trigger a repeated PlaceOrder or create a second local order.
+
+**References**:
+- [run_260724_175824_4a84](runs/2026-07-24_observe-recovery_terminal-restart-binance_run_260724_175824_4a84.md)
+- [Evidence Log](evidence/2026-07-24_observe-recovery_terminal-restart-binance_run_260724_175824_4a84.log)
+
+### QT-TERMINAL-RESTART-002: Preservation of active-order fields after restart
+
+**Status:** Confirmed for the tested run
+
+**Observation:**
+The following values matched before and after the Quantower restart:
+- OrderId
+- Comment
+- OrderPrice
+- OrderTotalQuantity
+- Status
+- FilledQuantity
+
+**Limitations:**
+ExpectedOrderPrice and ExpectedOrderTotalQuantity were not passed to ObserveRecovery. Their equality was established by comparing the preparation and recovery raw logs, not by built-in comparison fields.
+
+**Architectural consequence:**
+The recovered OrderId and current order snapshot are suitable correlation candidates for reconciliation in this connector. Comment remains an additional correlation signal, not the only ownership key.
+
+**References**:
+- [run_260724_175824_4a84](runs/2026-07-24_observe-recovery_terminal-restart-binance_run_260724_175824_4a84.md)
+- [Evidence Log](evidence/2026-07-24_observe-recovery_terminal-restart-binance_run_260724_175824_4a84.log)
+
+### QT-RECOVERY-DUP-001: Repeated callbacks after terminal restart
+
+**Status:** Inconclusive
+
+**Observation:**
+No repeated order, order-history or position callbacks were observed after terminal restart in this run. The order was available through CurrentSnapshot.
+
+**Conclusion:**
+Absence of repeated callbacks in this run does not prove that such callbacks cannot occur.
+
+**Architectural consequence:**
+The system must be prepared to handle repeated callbacks if they occur, even if they were not observed during this specific late-start strategy scenario.
+
+**References**:
+- [run_260724_175824_4a84](runs/2026-07-24_observe-recovery_terminal-restart-binance_run_260724_175824_4a84.md)
+- [Evidence Log](evidence/2026-07-24_observe-recovery_terminal-restart-binance_run_260724_175824_4a84.log)
+
+### QT-RECOVERY-FILL-001: Distinguishing recovered fills
+
+**Status:** Confirmed in a narrow sense
+
+**Observation:**
+Recovered active order with FilledQuantity=0 was observed via CurrentSnapshot and was successfully isolated from new fill events.
+
+**Limitations:**
+The behavior of a recovered terminal `Filled` status was not tested in this run.
+
+**Architectural consequence:**
+The current snapshot correctly isolates pre-existing open states.
+
+**References**:
+- [run_260724_175824_4a84](runs/2026-07-24_observe-recovery_terminal-restart-binance_run_260724_175824_4a84.md)
+- [Evidence Log](evidence/2026-07-24_observe-recovery_terminal-restart-binance_run_260724_175824_4a84.log)

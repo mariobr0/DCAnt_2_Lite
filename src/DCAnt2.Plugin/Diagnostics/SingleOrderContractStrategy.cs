@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -16,14 +16,26 @@ public class SingleOrderContractStrategy : Strategy
     [InputParameter("Symbol", 2)]
     public Symbol TestSymbol = null!;
 
-    [InputParameter("Scenario (ObserveFill, PlaceForFullFill, PlaceForPartialFill, CancelAndObserve)", 10)]
-    public string Scenario = "ObserveFill";
+    [InputParameter("Scenario", 10, variants: new object[] { "PrepareActiveOrder", "PrepareActiveOrder", "PrepareOpenPosition", "PrepareOpenPosition", "ObserveRecovery", "ObserveRecovery" })]
+    public string Scenario = "ObserveRecovery";
 
-    [InputParameter("Target Marker (for Observe/Cancel)", 20)]
+    [InputParameter("Target Marker (for ObserveRecovery)", 20)]
     public string InputTargetMarker = "";
 
-    [InputParameter("Observation Timeout (seconds)", 30)]
-    public int ObservationTimeoutSeconds = 30;
+    [InputParameter("Expected Order Id", 25)]
+    public string InputExpectedOrderId = "";
+
+    [InputParameter("Expected Order Price", 26, minimum: 0.0, maximum: 1000000.0, increment: 0.00000001, decimalPlaces: 8)]
+    public double InputExpectedOrderPrice = 0.0;
+
+    [InputParameter("Expected Order Total Quantity", 27, minimum: 0.0, maximum: 1000000.0, increment: 0.00000001, decimalPlaces: 8)]
+    public double InputExpectedOrderTotalQuantity = 0.0;
+
+    [InputParameter("Expected Position Quantity", 28, minimum: 0.0, maximum: 1000000.0, increment: 0.00000001, decimalPlaces: 8)]
+    public double InputExpectedPositionQuantity = 0.0;
+
+    [InputParameter("Expected Position Open Price", 29, minimum: 0.0, maximum: 1000000.0, increment: 0.00000001, decimalPlaces: 8)]
+    public double InputExpectedPositionOpenPrice = 0.0;
 
     [InputParameter("Test Price (Place...)", 40, minimum: 0.0, maximum: 1000000.0, increment: 0.00000001, decimalPlaces: 8)]
     public double TestPrice = 0.0;
@@ -37,17 +49,30 @@ public class SingleOrderContractStrategy : Strategy
     private string _runId = "";
     private string _targetMarker = "";
     private string _logPath = "";
-    private string? _observedOrderId;
     private readonly object _logLock = new object();
-    private readonly object _fillStateLock = new object();
     private readonly object _eventProcessingLock = new object();
 
-    private volatile bool _observationFinished;
     private volatile bool _stopping;
-    private Timer? _timer;
-
     private long _logSequence = 0;
-    private readonly Dictionary<string, double> _previousFilledQuantities = new();
+
+    // Baseline state (immutable)
+    private string _baselineOrderId = "Unknown";
+    private string _baselineOrderStatus = "Unknown";
+    private string _baselineFilledQty = "Unknown";
+    private string _baselineComment = "Unknown";
+    private string _baselinePositionQty = "Unknown";
+    private string _baselinePositionOpenPrice = "Unknown";
+
+    // Last Observed State (mutable)
+    private string _lastOrderId = "Unknown";
+    private string _lastOrderStatus = "Unknown";
+    private string _lastFilledQty = "Unknown";
+    private string _lastComment = "Unknown";
+    private string _lastPositionQty = "Unknown";
+    private string _lastPositionOpenPrice = "Unknown";
+    private string _lastConnectionState = "Unknown";
+
+    private string _recoveryPhase = "Unknown";
 
     public SingleOrderContractStrategy()
     {
@@ -60,10 +85,8 @@ public class SingleOrderContractStrategy : Strategy
         try
         {
             _stopping = false;
-            _observationFinished = false;
-            _observedOrderId = null;
             _logSequence = 0;
-            _previousFilledQuantities.Clear();
+            _recoveryPhase = "Starting";
 
             ValidateCommonInputs();
             GenerateRunId();
@@ -75,45 +98,30 @@ public class SingleOrderContractStrategy : Strategy
             }
             _logPath = Path.Combine(logsDir, $"DCAnt2_Contracts_{_runId}.log");
 
-            if (Scenario == "PlaceForFullFill" || Scenario == "PlaceForPartialFill")
+            if (Scenario == "PrepareActiveOrder" || Scenario == "PrepareOpenPosition")
             {
                 GenerateTargetMarker();
                 WriteLog("System", "TARGET_MARKER_CREATED", extraInfo: $"TargetMarker={Quote(_targetMarker)}");
+
+                ExecutePlaceScenario();
+
+                global::TradingPlatform.BusinessLayer.Core.Instance.OrderAdded += OnOrderEvent;
+                global::TradingPlatform.BusinessLayer.Core.Instance.OrderRemoved += OnOrderEvent;
+                global::TradingPlatform.BusinessLayer.Core.Instance.OrdersHistoryAdded += OnOrderHistoryEvent;
+                global::TradingPlatform.BusinessLayer.Core.Instance.PositionAdded += OnPositionEvent;
+                global::TradingPlatform.BusinessLayer.Core.Instance.PositionRemoved += OnPositionEvent;
+
+                _recoveryPhase = "Observing";
+                WriteLogLine(BuildSnapshotLine("Strategy", "StartSnapshot"));
+            }
+            else if (Scenario == "ObserveRecovery")
+            {
+                _targetMarker = InputTargetMarker;
+                InitializeObserveRecovery();
             }
             else
             {
-                _targetMarker = InputTargetMarker;
-            }
-
-            WriteLogLine(BuildSnapshotLine("Strategy", "StartSnapshot"));
-
-            global::TradingPlatform.BusinessLayer.Core.Instance.OrderAdded += OnOrderAdded;
-            global::TradingPlatform.BusinessLayer.Core.Instance.OrderRemoved += OnOrderRemoved;
-            global::TradingPlatform.BusinessLayer.Core.Instance.OrdersHistoryAdded += OnOrderHistoryEvent;
-
-            global::TradingPlatform.BusinessLayer.Core.Instance.PositionAdded += OnPositionAdded;
-            global::TradingPlatform.BusinessLayer.Core.Instance.PositionRemoved += OnPositionRemoved;
-
-            // Public API check for Execution/Trade
-            // Reflection is strictly forbidden by AGENTS.md rules. If it's not exposed publicly, it's NotSupported.
-            WriteLog("System", "TradeExecutionApi", extraInfo: "SupportStatus=NotSupported Reason=\"ExecutionAdded and TradeAdded are not publicly exposed by TradingPlatform.BusinessLayer.Core in this API version\"");
-
-            _timer = new Timer(OnObservationTimeout, null, TimeSpan.FromSeconds(ObservationTimeoutSeconds), Timeout.InfiniteTimeSpan);
-
-            switch (Scenario)
-            {
-                case "ObserveFill":
-                    break;
-                case "PlaceForFullFill":
-                case "PlaceForPartialFill":
-                    ExecutePlaceScenario();
-                    break;
-                case "CancelAndObserve":
-                    ExecuteCancelScenario();
-                    break;
-                default:
-                    WriteLog("Strategy", "UnknownScenario", extraInfo: $"Message=\"Unknown Scenario: {Scenario}. Defaulting to ObserveFill.\"");
-                    break;
+                WriteLog("Strategy", "UnknownScenario", extraInfo: $"Message=\"Unknown Scenario: {Scenario}. Defaulting to nothing.\"");
             }
         }
         catch (Exception ex)
@@ -123,17 +131,55 @@ public class SingleOrderContractStrategy : Strategy
         }
     }
 
+    private void InitializeObserveRecovery()
+    {
+        lock (_eventProcessingLock)
+        {
+            _recoveryPhase = "Initializing";
+
+            global::TradingPlatform.BusinessLayer.Core.Instance.OrderAdded += OnOrderEvent;
+            global::TradingPlatform.BusinessLayer.Core.Instance.OrderRemoved += OnOrderEvent;
+            global::TradingPlatform.BusinessLayer.Core.Instance.OrdersHistoryAdded += OnOrderHistoryEvent;
+            global::TradingPlatform.BusinessLayer.Core.Instance.PositionAdded += OnPositionEvent;
+            global::TradingPlatform.BusinessLayer.Core.Instance.PositionRemoved += OnPositionEvent;
+
+            var order = FindExpectedOrder();
+            var pos = ReadPosition(out string posState);
+
+            _baselineOrderId = order?.Id ?? "Unknown";
+            _baselineOrderStatus = order?.Status.ToString() ?? "Unknown";
+            _baselineFilledQty = order?.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "Unknown";
+            _baselineComment = order?.Comment ?? "Unknown";
+
+            _baselinePositionQty = pos != null ? pos.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : (posState == "Unknown" ? "Unknown" : "0");
+            _baselinePositionOpenPrice = pos != null ? pos.OpenPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown";
+
+            _lastOrderId = _baselineOrderId;
+            _lastOrderStatus = _baselineOrderStatus;
+            _lastFilledQty = _baselineFilledQty;
+            _lastComment = _baselineComment;
+
+            _lastPositionQty = _baselinePositionQty;
+            _lastPositionOpenPrice = _baselinePositionOpenPrice;
+
+            _lastConnectionState = GetConnectionStateSafe();
+
+            var line = BuildSnapshotLine("ObserveRecovery", "StartSnapshot", order, pos, posState, null, "Unknown", "Classification=CurrentSnapshot");
+            WriteLogLine(line);
+
+            _recoveryPhase = "Observing";
+        }
+    }
+
     protected override void OnStop()
     {
         _stopping = true;
-        _timer?.Dispose();
-        _timer = null;
 
-        global::TradingPlatform.BusinessLayer.Core.Instance.OrderAdded -= OnOrderAdded;
-        global::TradingPlatform.BusinessLayer.Core.Instance.OrderRemoved -= OnOrderRemoved;
+        global::TradingPlatform.BusinessLayer.Core.Instance.OrderAdded -= OnOrderEvent;
+        global::TradingPlatform.BusinessLayer.Core.Instance.OrderRemoved -= OnOrderEvent;
         global::TradingPlatform.BusinessLayer.Core.Instance.OrdersHistoryAdded -= OnOrderHistoryEvent;
-        global::TradingPlatform.BusinessLayer.Core.Instance.PositionAdded -= OnPositionAdded;
-        global::TradingPlatform.BusinessLayer.Core.Instance.PositionRemoved -= OnPositionRemoved;
+        global::TradingPlatform.BusinessLayer.Core.Instance.PositionAdded -= OnPositionEvent;
+        global::TradingPlatform.BusinessLayer.Core.Instance.PositionRemoved -= OnPositionEvent;
 
         var activeTestOrdersCount = FindActiveTestOrders().Length;
         var position = ReadPosition(out string positionState);
@@ -158,158 +204,171 @@ public class SingleOrderContractStrategy : Strategy
         }
 
         var extra = $"ManualCleanupRequired={cleanupRequired} CleanupReason={cleanupReason}";
-        var finalSnapshot = BuildSnapshotLine("Strategy", "OnStop", extraInfo: extra);
+        var finalSnapshot = BuildSnapshotLine("Strategy", "OnStop", null, position, positionState, null, "Unknown", extra);
 
         WriteLogLine(finalSnapshot);
     }
 
-    private void OnObservationTimeout(object? state)
+    private void OnOrderEvent(Order order)
     {
-        if (_observationFinished) return;
-        _observationFinished = true;
-
-        var snapshot = BuildSnapshotLine("Timer", "ObservationTimeout", extraInfo: "Message=\"Observation timeout reached\"");
-        WriteLogLine(snapshot);
-    }
-
-    private void OnOrderAdded(Order order) => HandleOrderEvent("OrderAdded", order);
-    private void OnOrderRemoved(Order order) => HandleOrderEvent("OrderRemoved", order);
-
-    private void HandleOrderEvent(string source, Order order)
-    {
-        bool triggeredProbes = false;
-        double filledQty = 0;
-
         lock (_eventProcessingLock)
         {
             if (_stopping) return;
+            if (order.Account?.Id != TestAccount?.Id || order.Symbol?.Id != TestSymbol?.Id) return;
 
-            bool accMatch = order.Account?.Id == TestAccount?.Id;
-            bool symMatch = order.Symbol?.Id == TestSymbol?.Id;
             bool markerMatches = !string.IsNullOrEmpty(_targetMarker) && order.Comment == _targetMarker;
-            bool orderIdMatches = !string.IsNullOrWhiteSpace(_observedOrderId) && order.Id == _observedOrderId;
+            bool orderIdMatches = !string.IsNullOrWhiteSpace(InputExpectedOrderId) && order.Id == InputExpectedOrderId;
+            if (!markerMatches && !orderIdMatches) return;
 
-            if (markerMatches && string.IsNullOrWhiteSpace(_observedOrderId))
+            string oId = order.Id;
+            string oStatus = order.Status.ToString();
+            string oFilledQty = order.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string oComment = order.Comment ?? "Unknown";
+
+            string classification = "Unknown";
+
+            if (_recoveryPhase == "Observing")
             {
-                _observedOrderId = order.Id;
-                orderIdMatches = true;
+                if (oId == _lastOrderId && oStatus == _lastOrderStatus && oFilledQty == _lastFilledQty && oComment == _lastComment)
+                {
+                    classification = "RepeatedStateNotification";
+                }
+                else
+                {
+                    classification = "NewStateChange";
+                }
+
+                _lastOrderId = oId;
+                _lastOrderStatus = oStatus;
+                _lastFilledQty = oFilledQty;
+                _lastComment = oComment;
             }
 
-            if (!accMatch || !symMatch || (!markerMatches && !orderIdMatches)) return;
+            CheckConnectionStateTrigger();
 
-            ProcessFilledQuantity(order.Id, order.FilledQuantity, out string prevQtyStr, out string diffStr, out triggeredProbes);
-            filledQty = order.FilledQuantity;
-
-            string timeStr = "Unknown";
-            string extra = $"AccMatch={accMatch} SymMatch={symMatch} MarkerMatches={markerMatches} OrderIdMatches={orderIdMatches} " +
-                           $"PreviousFilledQty={prevQtyStr} CurrentFilledQty={order.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture)} ObservedDifference={diffStr}";
-
-            var line = BuildSnapshotLine(source, "OrderState", order: order, providerTime: timeStr, extraInfo: extra);
+            string extra = $"Classification={classification}";
+            var line = BuildSnapshotLine("OrderEvent", "OrderState", order, null, null, null, "Unknown", extra);
             WriteLogLine(line);
-        }
-
-        if (triggeredProbes)
-        {
-            TriggerProbes(filledQty);
         }
     }
 
     private void OnOrderHistoryEvent(OrderHistory orderHistory)
     {
-        bool triggeredProbes = false;
-        double filledQty = 0;
-
         lock (_eventProcessingLock)
         {
             if (_stopping) return;
+            if (orderHistory.Account?.Id != TestAccount?.Id || orderHistory.Symbol?.Id != TestSymbol?.Id) return;
 
-            bool accMatch = orderHistory.Account?.Id == TestAccount?.Id;
-            bool symMatch = orderHistory.Symbol?.Id == TestSymbol?.Id;
             bool markerMatches = !string.IsNullOrEmpty(_targetMarker) && orderHistory.Comment == _targetMarker;
-            bool orderIdMatches = !string.IsNullOrWhiteSpace(_observedOrderId) && orderHistory.Id == _observedOrderId;
+            bool orderIdMatches = !string.IsNullOrWhiteSpace(InputExpectedOrderId) && orderHistory.Id == InputExpectedOrderId;
+            if (!markerMatches && !orderIdMatches) return;
 
-            if (markerMatches && string.IsNullOrWhiteSpace(_observedOrderId))
+            string oId = orderHistory.Id;
+            string oStatus = orderHistory.Status.ToString();
+            string oFilledQty = orderHistory.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string oComment = orderHistory.Comment ?? "Unknown";
+
+            string classification = "Unknown";
+            if (_recoveryPhase == "Observing")
             {
-                _observedOrderId = orderHistory.Id;
-                orderIdMatches = true;
+                if (oId == _lastOrderId && oStatus == _lastOrderStatus && oFilledQty == _lastFilledQty && oComment == _lastComment)
+                {
+                    classification = "RepeatedStateNotification";
+                }
+                else
+                {
+                    classification = "NewStateChange";
+                }
+
+                _lastOrderId = oId;
+                _lastOrderStatus = oStatus;
+                _lastFilledQty = oFilledQty;
+                _lastComment = oComment;
             }
 
-            if (!accMatch || !symMatch || (!markerMatches && !orderIdMatches)) return;
+            CheckConnectionStateTrigger();
 
-            ProcessFilledQuantity(orderHistory.Id, orderHistory.FilledQuantity, out string prevQtyStr, out string diffStr, out triggeredProbes);
-            filledQty = orderHistory.FilledQuantity;
-
-            string timeStr = "Unknown";
-            string extra = $"AccMatch={accMatch} SymMatch={symMatch} MarkerMatches={markerMatches} OrderIdMatches={orderIdMatches} " +
-                           $"PreviousFilledQty={prevQtyStr} CurrentFilledQty={orderHistory.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture)} ObservedDifference={diffStr}";
-            var line = BuildSnapshotLine("OrdersHistoryAdded", "OrderHistoryState", orderHistory: orderHistory, providerTime: timeStr, extraInfo: extra);
+            string extra = $"Classification={classification}";
+            var line = BuildSnapshotLine("OrderHistoryEvent", "OrderHistoryState", null, null, null, orderHistory, "Unknown", extra);
             WriteLogLine(line);
         }
-
-        if (triggeredProbes)
-        {
-            TriggerProbes(filledQty);
-        }
     }
 
-    private void ProcessFilledQuantity(string orderId, double currentFilled, out string prevQtyStr, out string diffStr, out bool triggeredProbes)
-    {
-        triggeredProbes = false;
-        if (string.IsNullOrWhiteSpace(orderId))
-        {
-            prevQtyStr = "Unknown";
-            diffStr = "Unknown";
-            return;
-        }
-
-        lock (_fillStateLock)
-        {
-            if (_previousFilledQuantities.TryGetValue(orderId, out double previous))
-            {
-                prevQtyStr = previous.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                double diff = currentFilled - previous;
-                diffStr = diff.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-                if (currentFilled > 0 && Math.Abs(diff) > 1e-8)
-                {
-                    triggeredProbes = true;
-                }
-            }
-            else
-            {
-                prevQtyStr = "Unknown";
-                diffStr = "Unknown";
-                if (currentFilled > 0)
-                {
-                    triggeredProbes = true;
-                }
-            }
-
-            _previousFilledQuantities[orderId] = currentFilled;
-        }
-    }
-
-    private void TriggerProbes(double triggerFilledQty)
-    {
-        // triggerFilledQty is captured locally before passing to async probe delays
-        ScheduleProbe(100, triggerFilledQty);
-        ScheduleProbe(250, triggerFilledQty);
-        ScheduleProbe(500, triggerFilledQty);
-        ScheduleProbe(1000, triggerFilledQty);
-    }
-
-    private void OnPositionAdded(Position position) => HandlePositionEvent("PositionAdded", position);
-    private void OnPositionRemoved(Position position) => HandlePositionEvent("PositionRemoved", position);
-
-    private void HandlePositionEvent(string source, Position position)
+    private void OnPositionEvent(Position position)
     {
         lock (_eventProcessingLock)
         {
             if (_stopping) return;
-            if (position.Account.Id != TestAccount?.Id || position.Symbol.Id != TestSymbol?.Id) return;
-            var line = BuildSnapshotLine(source, "PositionState", position: position);
+            if (position.Account?.Id != TestAccount?.Id || position.Symbol?.Id != TestSymbol?.Id) return;
+
+            string pQty = position.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string pPrice = position.OpenPrice.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            string classification = "Unknown";
+            if (_recoveryPhase == "Observing")
+            {
+                if (pQty == _lastPositionQty && pPrice == _lastPositionOpenPrice)
+                {
+                    classification = "RepeatedStateNotification";
+                }
+                else
+                {
+                    classification = "NewStateChange";
+                }
+
+                _lastPositionQty = pQty;
+                _lastPositionOpenPrice = pPrice;
+            }
+
+            CheckConnectionStateTrigger();
+
+            string extra = $"Classification={classification}";
+            var line = BuildSnapshotLine("PositionEvent", "PositionState", null, position, null, null, "Unknown", extra);
             WriteLogLine(line);
         }
+    }
+
+    private void CheckConnectionStateTrigger()
+    {
+        string currentConnState = GetConnectionStateSafe();
+        if (currentConnState != _lastConnectionState && currentConnState != "Unknown")
+        {
+            string triggerState = currentConnState;
+            _lastConnectionState = triggerState;
+            TriggerProbes(triggerState);
+        }
+    }
+
+    private void TriggerProbes(string triggerConnectionState)
+    {
+        ScheduleProbe(100, triggerConnectionState);
+        ScheduleProbe(250, triggerConnectionState);
+        ScheduleProbe(500, triggerConnectionState);
+        ScheduleProbe(1000, triggerConnectionState);
+        ScheduleProbe(2000, triggerConnectionState);
+        ScheduleProbe(5000, triggerConnectionState);
+    }
+
+    private void ScheduleProbe(int delayMs, string triggerConnectionState)
+    {
+        Task.Run(async () =>
+        {
+            await Task.Delay(delayMs);
+            if (_stopping) return;
+            try
+            {
+                var pos = ReadPosition(out string pState);
+                var order = FindExpectedOrder();
+                string obsConnState = GetConnectionStateSafe();
+
+                string extra = $"Classification=Unknown TriggerConnectionState={triggerConnectionState} ProbeDelayMs={delayMs} ObservedConnectionState={obsConnState}";
+                WriteLogLine(BuildSnapshotLine("Probe", "RecoveryProbe", order, pos, pState, null, "Unknown", extra));
+            }
+            catch (Exception ex)
+            {
+                if (!_stopping) WriteLog("Probe", "Error", extraInfo: $"Probe {delayMs}ms failed: {Quote(ex.Message)}");
+            }
+        });
     }
 
     private void ExecutePlaceScenario()
@@ -325,13 +384,11 @@ public class SingleOrderContractStrategy : Strategy
             WriteLog("Strategy", "POSITION_CHECK", extraInfo: $"Result=Unknown PlaceAllowed=False");
             throw new InvalidOperationException("Place forbidden. Position state is Unknown.");
         }
-        if (positionState == "Open")
+        if (positionState == "Open" || (position != null && Math.Abs(position.Quantity) > 0))
         {
             WriteLog("Strategy", "POSITION_CHECK", extraInfo: $"Result=Open PositionQty={position?.Quantity} PlaceAllowed=False");
             throw new InvalidOperationException($"Place forbidden. Position is not zero. Found: {position?.Quantity}");
         }
-
-        WriteLog("Strategy", "POSITION_CHECK", extraInfo: "Result=None PositionQty=0 PlaceAllowed=True");
 
         var activeOrders = FindActiveTestOrders();
         if (activeOrders.Length > 0)
@@ -339,6 +396,7 @@ public class SingleOrderContractStrategy : Strategy
             throw new InvalidOperationException($"Place forbidden. Found {activeOrders.Length} active qtct_ orders");
         }
 
+        WriteLog("Strategy", "POSITION_CHECK", extraInfo: "Result=None PositionQty=0 ActiveTestOrdersCount=0 PlaceAllowed=True");
         WriteLogLine(BuildSnapshotLine("Strategy", "BeforeApiCall"));
 
         var request = new PlaceOrderRequestParameters
@@ -357,84 +415,7 @@ public class SingleOrderContractStrategy : Strategy
         var result = global::TradingPlatform.BusinessLayer.Core.Instance.PlaceOrder(request);
         watch.Stop();
 
-        if (result.Status.ToString() == "Success" && !string.IsNullOrWhiteSpace(result.OrderId))
-        {
-            _observedOrderId = result.OrderId;
-        }
-
-        WriteLog("Strategy", "AfterApiCall", extraInfo: $"PlaceOrder API result: Status={result.Status} Message={Quote(result.Message)} ReturnedOrderId={Quote(result.OrderId)} ElapsedMs={watch.ElapsedMilliseconds}");
-    }
-
-    private void ScheduleProbe(int delayMs, double triggerFilledQty)
-    {
-        Task.Run(async () =>
-        {
-            await Task.Delay(delayMs);
-            if (_stopping) return;
-            try
-            {
-                var pos = ReadPosition(out string pState);
-                string pQty = pos != null ? pos.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : "0";
-                string pPrice = pos != null ? pos.OpenPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown";
-
-                string extra = $"TriggerFilledQty={triggerFilledQty.ToString(System.Globalization.CultureInfo.InvariantCulture)} ProbeDelayMs={delayMs} PositionQty={pQty} PositionOpenPrice={pPrice}";
-                WriteLogLine(BuildSnapshotLine("Probe", "PositionProbe", position: pos, positionState: pState, extraInfo: extra));
-            }
-            catch (Exception ex)
-            {
-                if (!_stopping) WriteLog("Probe", "Error", extraInfo: $"Probe {delayMs}ms failed: {Quote(ex.Message)}");
-            }
-        });
-    }
-
-    private void ExecuteCancelScenario()
-    {
-        var matches = FindMatchingActiveOrders();
-        if (matches.Length == 0)
-        {
-            WriteLog("Strategy", "CancelSkipped", extraInfo: "Reason=\"Found 0 matching orders.\"");
-            return;
-        }
-        if (matches.Length > 1)
-        {
-            WriteLog("Strategy", "CancelSkipped", extraInfo: $"Reason=\"Found {matches.Length} matching orders.\"");
-            return;
-        }
-
-        var targetOrder = matches[0];
-        _observedOrderId = targetOrder.Id;
-        WriteLogLine(BuildSnapshotLine("Strategy", "BeforeApiCall", order: targetOrder));
-
-        bool accountPresent = targetOrder.Account != null;
-        bool connectionPresent = !string.IsNullOrEmpty(targetOrder.ConnectionId);
-
-        WriteLog("Strategy", "CANCEL_REQUEST", extraInfo: $"OrderObjectPresent=True OrderId=\"{targetOrder.Id}\" AccountPresent={accountPresent} AccountId=\"{targetOrder.Account?.Id ?? "null"}\" ConnectionId=\"{targetOrder.ConnectionId ?? "null"}\" SymbolId=\"{targetOrder.Symbol?.Id ?? "null"}\" TargetMarker=\"{targetOrder.Comment ?? "null"}\" CancelAllowed={(accountPresent && connectionPresent)}");
-
-        if (!accountPresent || !connectionPresent)
-        {
-            WriteLog("Strategy", "CancelSkipped", extraInfo: "Reason=\"MissingConnectionContext\"");
-            return;
-        }
-
-        var request = new CancelOrderRequestParameters()
-        {
-            Order = targetOrder
-        };
-
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        try
-        {
-            var result = global::TradingPlatform.BusinessLayer.Core.Instance.CancelOrder(request);
-            watch.Stop();
-            WriteLog("Strategy", "CancelApiResult", extraInfo: $"Status={result.Status} Message={Quote(result.Message)} ElapsedMs={watch.ElapsedMilliseconds}");
-        }
-        catch (Exception ex)
-        {
-            watch.Stop();
-            WriteLog("Strategy", "CancelApiException", extraInfo: $"ElapsedMs={watch.ElapsedMilliseconds} Exception={ex.GetType().Name}: {Quote(ex.Message)}");
-        }
-
-        WriteLogLine(BuildSnapshotLine("Strategy", "AfterApiCall", order: targetOrder));
+        WriteLog("Strategy", "AfterApiCall", extraInfo: $"Classification=Unknown PlaceOrderStatus={result.Status} Message={Quote(result.Message)} ReturnedOrderId={Quote(result.OrderId)} ElapsedMs={watch.ElapsedMilliseconds}");
     }
 
     private void ValidateCommonInputs()
@@ -461,15 +442,15 @@ public class SingleOrderContractStrategy : Strategy
         ).ToArray();
     }
 
-    private Order[] FindMatchingActiveOrders()
+    private Order? FindExpectedOrder()
     {
-        if (string.IsNullOrEmpty(_targetMarker)) return Array.Empty<Order>();
-        return global::TradingPlatform.BusinessLayer.Core.Instance.Orders.Where(o =>
+        var orders = global::TradingPlatform.BusinessLayer.Core.Instance.Orders.Where(o =>
             o.Account.Id == TestAccount?.Id &&
             o.Symbol.Id == TestSymbol?.Id &&
-            o.Status == OrderStatus.Opened &&
-            o.Comment == _targetMarker
+            ((!string.IsNullOrEmpty(_targetMarker) && o.Comment == _targetMarker) ||
+             (!string.IsNullOrWhiteSpace(InputExpectedOrderId) && o.Id == InputExpectedOrderId))
         ).ToArray();
+        return orders.FirstOrDefault();
     }
 
     private Position? ReadPosition(out string positionState)
@@ -499,6 +480,38 @@ public class SingleOrderContractStrategy : Strategy
         {
             positionState = "Unknown";
             return null;
+        }
+    }
+
+    private string GetConnectionStateSafe()
+    {
+        try
+        {
+            if (TestAccount != null && TestAccount.Connection != null)
+            {
+                return TestAccount.Connection.State.ToString();
+            }
+            return "Unknown";
+        }
+        catch
+        {
+            return "Unknown";
+        }
+    }
+
+    private string GetConnectionIdSafe()
+    {
+        try
+        {
+            if (TestAccount != null && TestAccount.Connection != null)
+            {
+                return TestAccount.Connection.Id ?? "Unknown";
+            }
+            return "Unknown";
+        }
+        catch
+        {
+            return "Unknown";
         }
     }
 
@@ -545,8 +558,6 @@ public class SingleOrderContractStrategy : Strategy
             positionState = "Unknown";
         }
 
-        var matchingOrders = FindMatchingActiveOrders();
-
         string pQty = positionState == "Unknown" ? "Unknown" : "0";
         string pPrice = "Unknown";
         if (position != null && Math.Abs(position.Quantity) > 0)
@@ -557,35 +568,61 @@ public class SingleOrderContractStrategy : Strategy
 
         var activeOrdersCount = CountActiveOrders();
         var activeTestOrdersCount = FindActiveTestOrders().Length;
-        var matchingOrdersCount = matchingOrders.Length;
 
-        Order? snapshotOrder = order;
-        if (snapshotOrder == null && matchingOrdersCount == 1)
-        {
-            snapshotOrder = matchingOrders[0];
-        }
+        Order? snapshotOrder = order ?? FindExpectedOrder();
 
-        string defaultStr = matchingOrdersCount > 1 ? "Ambiguous" : "Unknown";
+        var oId = snapshotOrder != null ? snapshotOrder.Id : (orderHistory != null ? orderHistory.Id : "Unknown");
+        var oStatus = snapshotOrder != null ? snapshotOrder.Status.ToString() : (orderHistory != null ? orderHistory.Status.ToString() : "Unknown");
+        var oComment = snapshotOrder != null ? snapshotOrder.Comment : (orderHistory != null ? orderHistory.Comment : "Unknown");
+        var oPrice = snapshotOrder != null ? snapshotOrder.Price.ToString(System.Globalization.CultureInfo.InvariantCulture) : (orderHistory != null ? orderHistory.Price.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown");
+        var oTQty = snapshotOrder != null ? snapshotOrder.TotalQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : (orderHistory != null ? orderHistory.TotalQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown");
+        var oFQty = snapshotOrder != null ? snapshotOrder.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : (orderHistory != null ? orderHistory.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown");
 
-        var oId = snapshotOrder != null ? snapshotOrder.Id : (orderHistory != null ? orderHistory.Id : defaultStr);
-        var oStatus = snapshotOrder != null ? snapshotOrder.Status.ToString() : (orderHistory != null ? orderHistory.Status.ToString() : defaultStr);
-        var oComment = snapshotOrder != null ? snapshotOrder.Comment : (orderHistory != null ? orderHistory.Comment : defaultStr);
-        var oPrice = snapshotOrder != null ? snapshotOrder.Price.ToString(System.Globalization.CultureInfo.InvariantCulture) : (orderHistory != null ? orderHistory.Price.ToString(System.Globalization.CultureInfo.InvariantCulture) : defaultStr);
-        var oTQty = snapshotOrder != null ? snapshotOrder.TotalQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : (orderHistory != null ? orderHistory.TotalQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : defaultStr);
-        var oFQty = snapshotOrder != null ? snapshotOrder.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : (orderHistory != null ? orderHistory.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : defaultStr);
-        var oAvgP = snapshotOrder != null ? snapshotOrder.AverageFillPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : (orderHistory != null ? orderHistory.AverageFillPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : defaultStr);
+        string orderPresent = (snapshotOrder != null) ? "True" : "False";
+
+        string connId = GetConnectionIdSafe();
+        string connState = GetConnectionStateSafe();
+
+        // Expected matches
+        string expOrderIdMatches = "Unknown";
+        if (!string.IsNullOrWhiteSpace(InputExpectedOrderId))
+            expOrderIdMatches = (oId == InputExpectedOrderId).ToString();
+
+        string expPriceMatches = "Unknown";
+        if (InputExpectedOrderPrice > 0)
+            expPriceMatches = (snapshotOrder != null && Math.Abs(snapshotOrder.Price - InputExpectedOrderPrice) < 1e-8).ToString();
+
+        string expTotalQtyMatches = "Unknown";
+        if (InputExpectedOrderTotalQuantity > 0)
+            expTotalQtyMatches = (snapshotOrder != null && Math.Abs(snapshotOrder.TotalQuantity - InputExpectedOrderTotalQuantity) < 1e-8).ToString();
+
+        string expPosQtyMatches = "Unknown";
+        if (InputExpectedPositionQuantity > 0)
+            expPosQtyMatches = (position != null && Math.Abs(position.Quantity - InputExpectedPositionQuantity) < 1e-8).ToString();
+
+        string expPosOpenPriceMatches = "Unknown";
+        if (InputExpectedPositionOpenPrice > 0)
+            expPosOpenPriceMatches = (position != null && Math.Abs(position.OpenPrice - InputExpectedPositionOpenPrice) < 1e-8).ToString();
 
         var threadId = Thread.CurrentThread.ManagedThreadId;
         var accName = TestAccount != null ? Quote(TestAccount.Name) : "Unknown";
-        var obsFin = _observationFinished ? " ObservationFinished=True" : "";
+
+        string expOrderIdStr = string.IsNullOrWhiteSpace(InputExpectedOrderId) ? "Unknown" : Quote(InputExpectedOrderId);
+        string expPriceStr = InputExpectedOrderPrice > 0 ? InputExpectedOrderPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown";
+        string expTotalQtyStr = InputExpectedOrderTotalQuantity > 0 ? InputExpectedOrderTotalQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown";
+        string expPosQtyStr = InputExpectedPositionQuantity > 0 ? InputExpectedPositionQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown";
+        string expPosPriceStr = InputExpectedPositionOpenPrice > 0 ? InputExpectedPositionOpenPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown";
 
         return $"ProviderTime={providerTime} " +
-               $"RunId=[{_runId}] TargetMarker=[{_targetMarker}] Scenario=[{Scenario}] Source=[{source}] Event=[{eventName}] " +
+               $"RunId=[{_runId}] TargetMarker=[{_targetMarker}] Scenario=[{Scenario}] RecoveryPhase=[{_recoveryPhase}] Source=[{source}] Event=[{eventName}] " +
+               $"ConnectionId={Quote(connId)} ConnectionState={Quote(connState)} " +
                $"AccountId={Quote(TestAccount?.Id)} AccountName={accName} SymbolId={Quote(TestSymbol?.Id)} " +
-               $"ActiveOrdersCount={activeOrdersCount} ActiveTestOrdersCount={activeTestOrdersCount} MatchingOrdersCount={matchingOrdersCount} " +
+               $"ExpectedOrderId={expOrderIdStr} ExpectedOrderPrice={expPriceStr} ExpectedOrderTotalQuantity={expTotalQtyStr} ExpectedPositionQuantity={expPosQtyStr} ExpectedPositionOpenPrice={expPosPriceStr} " +
+               $"ExpectedOrderIdMatches={expOrderIdMatches} ExpectedOrderPriceMatches={expPriceMatches} ExpectedOrderTotalQuantityMatches={expTotalQtyMatches} ExpectedPositionQuantityMatches={expPosQtyMatches} ExpectedPositionOpenPriceMatches={expPosOpenPriceMatches} " +
+               $"OrderPresentInActiveCollection={orderPresent} " +
                $"PositionState={positionState} PositionQty={pQty} PositionOpenPrice={pPrice} " +
                $"OrderId={Quote(oId)} Status={Quote(oStatus)} Comment={Quote(oComment)} " +
-               $"Price={oPrice} TotalQty={oTQty} FilledQty={oFQty} AverageFillPrice={oAvgP}{obsFin}" +
+               $"OrderPrice={oPrice} OrderTotalQuantity={oTQty} FilledQuantity={oFQty}" +
                (string.IsNullOrEmpty(extraInfo) ? "" : $" {extraInfo}") +
                $" ThreadId={threadId}";
     }
