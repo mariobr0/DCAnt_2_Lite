@@ -1,4 +1,4 @@
-# Quantower Single Order Contracts
+﻿# Quantower Single Order Contracts
 
 ## Overview
 This document tracks the verified behavior of Quantower API specifically related to placing, modifying, and canceling single orders, as well as the visibility of these orders in the `Core.Orders` and `Core.OrdersHistory` collections and related callbacks.
@@ -13,19 +13,23 @@ This document tracks the verified behavior of Quantower API specifically related
 **References**:
 - [run_260724_100206_3cb1](runs/2026-07-24_PlaceAndObserve_run_260724_100206_3cb1.md)
 - [Evidence Log](evidence/2026-07-24_PlaceAndObserve_run_260724_100206_3cb1.log)
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
 
 ### QT-PLACE-002: Order visibility is observed after the local API result
 **Status:** Confirmed for this run
 **Observation:** The immediate snapshot after `PlaceOrder` contained no matching order. `OrderAdded` was observed approximately 54.9 ms after the API result. A 250 ms probe also found the order in `Core.Orders`.
 **Conclusion:** Order visibility is asynchronous relative to the local API result.
 **Limitations:** The observed delay is not a fixed guarantee and may vary by load, connector, connection state and Quantower version.
-**Architectural consequence:** Prefer an observed callback or reconciliation. Do not use the measured 54.9 ms, or any derived fixed sleep such as 50–100 ms, as proof that the order exists.
+**Architectural consequence:** Prefer an observed callback or reconciliation. Do not use the measured 54.9 ms, or any derived fixed sleep such as 50â€“100 ms, as proof that the order exists.
 **References**:
 - [run_260724_100206_3cb1](runs/2026-07-24_PlaceAndObserve_run_260724_100206_3cb1.md)
 - [Evidence Log](evidence/2026-07-24_PlaceAndObserve_run_260724_100206_3cb1.log)
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
 
 ### QT-ID-001: ReturnedOrderId corresponds to the observed Order.Id
-**Status:** Confirmed for the tested Place scenario
+**Status:** Confirmed for Place, Opened, and Filled scenarios
 **Observation:** The same value was observed in:
 - `PlaceOrder ReturnedOrderId`;
 - `OrderAdded Order.Id`;
@@ -37,19 +41,24 @@ This document tracks the verified behavior of Quantower API specifically related
 **References**:
 - [run_260724_100206_3cb1](runs/2026-07-24_PlaceAndObserve_run_260724_100206_3cb1.md)
 - [Evidence Log](evidence/2026-07-24_PlaceAndObserve_run_260724_100206_3cb1.log)
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
 
 ### QT-ID-002: Comment is preserved during the tested Place lifecycle
-**Status:** Confirmed for Place and Opened state
+**Status:** Confirmed for Place, Opened, and Filled states
 **Observation:** The exact `TargetMarker` was preserved in:
 - `OrderAdded`;
-- `OrdersHistoryAdded` with `Status=Opened`;
-- `Core.Orders`.
+- `OrdersHistoryAdded` with `Status=Opened` and `Status=Filled`;
+- `Core.Orders`;
+- `OrderRemoved`.
 **Conclusion:** Comment can be used as a diagnostic correlation signal during the tested Place/Open scenario.
 **Limitations:** Reliability after Cancel, fill, reconnect, restart, ModifyOrder and on other connectors is not yet confirmed.
 **Architectural consequence:** Comment may participate in order correlation, but it must not yet be the only ownership key in production code.
 **References**:
 - [run_260724_100206_3cb1](runs/2026-07-24_PlaceAndObserve_run_260724_100206_3cb1.md)
 - [Evidence Log](evidence/2026-07-24_PlaceAndObserve_run_260724_100206_3cb1.log)
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
 
 ### QT-CANCEL-001: Cancel confirmation
 **Status:** Confirmed for the tested environment
@@ -107,3 +116,79 @@ Based on the validated contracts, replacing a TakeProfit (TP) or StopLoss (SL) m
 ## Additional observations
 - `OrdersHistoryAdded` was observed for `Status=Opened` with `FilledQty=0`.
 - Therefore, `OrdersHistoryAdded` must not be interpreted as a financial execution solely from the event name.
+
+### QT-FILL-001: FilledQuantity behavior
+**Status:** Confirmed
+**Observation:** In PlaceForPartialFill, FilledQuantity continuously increases on each partial fill event. with TotalQty=10 and Status=Filled.
+**Conclusion:** A single full fill does not allow distinguishing whether FilledQuantity represents a cumulative total or the quantity of the latest fill. Both explanations yield 10. ObservedDifference=10 is only a diagnostic difference, not a separate execution event.
+
+**Architectural consequence:** Delta must be manually calculated by tracking `PreviousFilledQty` if delta semantics are needed.
+**References**:
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
+
+### QT-FILL-002: AverageFillPrice
+**Status:** Inconclusive
+**Observation:** In this test, AverageFillPrice=0.10674 matched exactly with PositionOpenPrice=0.10674.
+**Conclusion:** A single full fill confirms equality, but does not prove whether AverageFillPrice is a cumulative average or the price of the latest fill.
+
+**Architectural consequence:** Do not treat `AverageFillPrice` as the price of a single transaction.
+**References**:
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
+
+### QT-FILL-003: Separate Trade/Execution source
+**Status:** NotSupported in the examined public surface of Core (Quantower v1.146.16)
+**Observation:** ExecutionAdded and TradeAdded were not publicly exposed by TradingPlatform.BusinessLayer.Core in this API version.
+**Conclusion:** There are no separate public Trade or Execution events available through the standard Core surface in this environment.
+**Limitations:** Data might be available via another public collection, history, or connector-specific API.
+**Architectural consequence:** Do not attempt to subscribe to ExecutionAdded or TradeAdded via reflection.
+**References**:
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
+
+### QT-FILL-004: Stable Execution ID
+**Status:** NotSupported or Inconclusive
+**Observation:** Without a separate Trade/Execution source, a distinct Execution ID cannot be obtained.
+**Conclusion:** OrderId cannot be used as an Execution ID.
+**Architectural consequence:** Do not invent exec_<OrderId>.
+**References**:
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
+
+### QT-FILL-005: Callback order on full fill
+**Status:** Confirmed for this run
+**Observation:** The observed sequence was: OrderAdded/Open -> OrdersHistoryAdded/Open -> OrderRemoved/Open -> OrdersHistoryAdded/Filled -> PositionAdded. Crucially, OrderRemoved maintained Status=Opened.
+**Conclusion:** OrderRemoved does not provide the final filled state. OrdersHistoryAdded provides the final Status=Filled.
+**Architectural consequence:** Do not rely on OrderRemoved for the filled state.
+**References**:
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
+
+### QT-POS-001: Position update timing
+**Status:** Confirmed for this run
+**Observation:** Core.Positions showed no position during the OrdersHistoryAdded/Filled callback. Approximately 6.26 ms later, PositionAdded fired.
+**Conclusion:** The position is updated via a separate asynchronous event after the terminal order-history callback.
+**Architectural consequence:** EngineLoop must not assume Core.Positions is updated immediately inside the order Filled callback. A separate check or reconciliation is needed.
+**References**:
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
+
+### QT-POS-002: Position.OpenPrice
+**Status:** Confirmed only for a single full fill
+**Observation:** AverageFillPrice=0.10674 matched PositionOpenPrice=0.10674.
+**Conclusion:** Equality holds for a single fill.
+**Limitations:** Semantics after multiple partial fills are not proven.
+**Architectural consequence:** Needs partial fill testing.
+**References**:
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
+
+### QT-DUP-001: Event duplication
+**Status:** NotObservedInThisRun (Inconclusive)
+**Observation:** Multi-source notifications (OrderAdded/OrdersHistoryAdded) were observed, but exact same-source duplicates were not observed in this run.
+**Conclusion:** Absence of exact duplicates in one run does not prove they are impossible.
+**Architectural consequence:** Retain idempotency protection.
+**References**:
+- [run_260724_141120_58fa](runs/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.md)
+- [Evidence Log](evidence/2026-07-24_PlaceForFullFill_run_260724_141120_58fa.log)
