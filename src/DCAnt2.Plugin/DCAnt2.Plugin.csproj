@@ -1,9 +1,16 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\DCAnt2.Core\DCAnt2.Core.csproj" />
     <ProjectReference Include="..\DCAnt2.Infrastructure\DCAnt2.Infrastructure.csproj" />
     <ProjectReference Include="..\DCAnt2.Quantower\DCAnt2.Quantower.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="TradingPlatform.BusinessLayer">
+      <HintPath>C:\Users\dzam\Desktop\APPs\Quantower\TradingPlatform\v1.146.16\bin\TradingPlatform.BusinessLayer.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 
   <PropertyGroup>
