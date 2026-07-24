@@ -18,10 +18,10 @@ public class InstrumentRulesTests
     [InlineData(65000.25, 65000.5)]
     [InlineData(65000.3, 65000.5)]
     [InlineData(65000.75, 65001.0)]
-    public void RoundPrice_RoundsToNearestTickSize(decimal input, decimal expected)
+    public void RoundPriceToNearest_RoundsToNearestTickSize(decimal input, decimal expected)
     {
         var price = new Price(input);
-        var rounded = _rules.RoundPrice(price);
+        var rounded = _rules.RoundPriceToNearest(price);
         Assert.Equal(expected, rounded.Value);
     }
 

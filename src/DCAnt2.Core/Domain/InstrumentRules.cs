@@ -22,7 +22,7 @@ public record InstrumentRules
         MinNotional = minNotional;
     }
 
-    public Price RoundPrice(Price price)
+    public Price RoundPriceToNearest(Price price)
     {
         if (price.Value == 0) return price;
         decimal roundedValue = Math.Round(price.Value / TickSize, MidpointRounding.AwayFromZero) * TickSize;

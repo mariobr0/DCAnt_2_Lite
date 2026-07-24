@@ -36,4 +36,44 @@ public class FinancialTypesTests
         Assert.Equal(15m, sum.Value);
         Assert.Equal(5m, diff.Value);
     }
+
+    [Fact]
+    public void Money_Subtraction_ProducingNegativeValue_ThrowsArgumentOutOfRangeException()
+    {
+        var left = new Money(5m);
+        var right = new Money(10m);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => _ = left - right);
+    }
+
+    [Fact]
+    public void Quantity_Subtraction_ProducingNegativeValue_ThrowsArgumentOutOfRangeException()
+    {
+        var left = new Quantity(5m);
+        var right = new Quantity(10m);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => _ = left - right);
+    }
+
+    [Fact]
+    public void Money_Subtraction_ProducingZero_IsAllowed()
+    {
+        var left = new Money(5m);
+        var right = new Money(5m);
+
+        var result = left - right;
+
+        Assert.Equal(0m, result.Value);
+    }
+
+    [Fact]
+    public void Quantity_Subtraction_ProducingZero_IsAllowed()
+    {
+        var left = new Quantity(5m);
+        var right = new Quantity(5m);
+
+        var result = left - right;
+
+        Assert.Equal(0m, result.Value);
+    }
 }

@@ -6,6 +6,11 @@ public record GridSettings
 {
     public Money FirstOrderVolume { get; }
     public Money MaxCapital { get; }
+
+    /// <summary>
+    /// Number of DCA levels excluding the first order.
+    /// A value of zero produces a plan containing only the first order.
+    /// </summary>
     public int MaxLevels { get; }
     public decimal BaseStepPercent { get; }
     public decimal StepScale { get; }
@@ -15,6 +20,7 @@ public record GridSettings
     {
         if (firstOrderVolume.Value <= 0) throw new ArgumentException("FirstOrderVolume must be positive.");
         if (maxCapital.Value <= 0) throw new ArgumentException("MaxCapital must be positive.");
+        if (firstOrderVolume.Value > maxCapital.Value) throw new ArgumentException("FirstOrderVolume cannot exceed MaxCapital.");
         if (maxLevels < 0) throw new ArgumentException("MaxLevels cannot be negative.");
         if (baseStepPercent <= 0) throw new ArgumentException("BaseStepPercent must be positive.");
         if (stepScale <= 0) throw new ArgumentException("StepScale must be positive.");

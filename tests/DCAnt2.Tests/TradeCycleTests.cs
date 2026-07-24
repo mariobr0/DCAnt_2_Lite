@@ -1,133 +1,212 @@
+using System;
 using DCAnt2.Core.Domain;
 using Xunit;
-using System.Linq;
 
 namespace DCAnt2.Tests;
 
 public class TradeCycleTests
 {
-    private readonly InstrumentRules _rules = new InstrumentRules("USDT", 0.01m, 0.01m, 1m);
-
     [Fact]
-    public void Start_CreatesFirstOrderIntent()
+    public void Constructor_InitializesCorrectly()
     {
-        var cycle = new TradeCycle(TradeCycleId.New(), 2m, _rules, OrderSide.Buy);
-        cycle.Start(new Price(100m), new Quantity(1m));
+        var id = TradeCycleId.New();
+        var cycle = new TradeCycle(id, TradeDirection.Long);
 
-        Assert.Single(cycle.Outbox);
-        var intent = (PlaceOrderIntent)cycle.Outbox[0];
-        Assert.NotNull(intent);
-        Assert.Equal(OrderPurpose.FirstOrder, intent.Purpose);
-        Assert.Equal(OrderSide.Buy, intent.Side);
-        Assert.Equal(100m, intent.Price.Value);
-        Assert.Equal(1m, intent.Quantity.Value);
+        Assert.Equal(id, cycle.Id);
+        Assert.Equal(TradeDirection.Long, cycle.Direction);
         Assert.Equal(TradeCycleStatus.Active, cycle.Status);
+        Assert.Equal(0m, cycle.PositionQuantity.Value);
+        Assert.Equal(0m, cycle.PositionVwap.Value);
+        Assert.Equal(0, cycle.RegisteredOrderCount);
     }
 
     [Fact]
-    public void Handle_FirstOrderExecuted_UpdatesPositionAndPlacesTakeProfit()
+    public void RegisterOrder_RegistersOwnership()
     {
-        var cycle = new TradeCycle(TradeCycleId.New(), 2m, _rules, OrderSide.Buy);
-        cycle.Start(new Price(100m), new Quantity(1m));
-        
-        var startIntent = (PlaceOrderIntent)cycle.Outbox[0];
-        cycle.ClearOutbox();
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Short);
+        var orderId = InternalOrderId.New();
 
-        cycle.Handle(new OrderExecuted(startIntent.OrderId, new Price(100m), new Quantity(1m)));
+        cycle.RegisterOrder(orderId, OrderPurpose.FirstOrder);
 
-        Assert.Equal(1m, cycle.PositionQuantity.Value);
-        Assert.Equal(100m, cycle.PositionVwap.Value);
-        
-        Assert.Single(cycle.Outbox);
-        var tpIntent = (PlaceOrderIntent)cycle.Outbox[0];
-        Assert.NotNull(tpIntent);
-        Assert.Equal(OrderPurpose.TakeProfit, tpIntent.Purpose);
-        Assert.Equal(OrderSide.Sell, tpIntent.Side); // TP for Buy is Sell
-        Assert.Equal(102m, tpIntent.Price.Value); // 100 + 2%
-        Assert.Equal(1m, tpIntent.Quantity.Value);
+        Assert.Equal(1, cycle.RegisteredOrderCount);
+        Assert.True(cycle.OwnsOrder(orderId));
     }
 
     [Fact]
-    public void Handle_DcaOrderExecuted_UpdatesVwapAndMovesTakeProfit()
+    public void RegisterOrder_StoresPurpose()
     {
-        var cycle = new TradeCycle(TradeCycleId.New(), 2m, _rules, OrderSide.Buy);
-        cycle.Start(new Price(100m), new Quantity(1m));
-        var startIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
-        cycle.Handle(new OrderExecuted(startIntent.OrderId, new Price(100m), new Quantity(1m)));
-        cycle.ClearOutbox();
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Short);
+        var orderId = InternalOrderId.New();
 
-        cycle.PlaceDca(new Price(90m), new Quantity(1m));
-        var dcaIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
-        cycle.ClearOutbox();
+        cycle.RegisterOrder(orderId, OrderPurpose.DcaOrder);
 
-        cycle.Handle(new OrderExecuted(dcaIntent.OrderId, new Price(90m), new Quantity(1m)));
+        var found = cycle.TryGetOrderPurpose(orderId, out var purpose);
 
-        Assert.Equal(2m, cycle.PositionQuantity.Value);
-        Assert.Equal(95m, cycle.PositionVwap.Value); // (100*1 + 90*1)/2
-        
-        // Outbox should contain Cancel TP and new Place TP
-        Assert.Equal(2, cycle.Outbox.Count);
-        Assert.IsType<CancelOrderIntent>(cycle.Outbox[0]);
-        var tpIntent = (PlaceOrderIntent)cycle.Outbox[1];
-        Assert.NotNull(tpIntent);
-        Assert.Equal(OrderPurpose.TakeProfit, tpIntent.Purpose);
-        // TP price = 95 + 2% = 96.90
-        Assert.Equal(96.90m, tpIntent.Price.Value);
-        Assert.Equal(2m, tpIntent.Quantity.Value);
+        Assert.True(found);
+        Assert.Equal(OrderPurpose.DcaOrder, purpose);
     }
 
     [Fact]
-    public void Handle_OrderRejected_EntersExitOnly()
+    public void RegisterOrder_Twice_ThrowsInvalidOperationException()
     {
-        var cycle = new TradeCycle(TradeCycleId.New(), 2m, _rules, OrderSide.Buy);
-        cycle.Start(new Price(100m), new Quantity(1m));
-        var startIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
-        cycle.Handle(new OrderExecuted(startIntent.OrderId, new Price(100m), new Quantity(1m)));
-        cycle.ClearOutbox();
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        var orderId = InternalOrderId.New();
 
-        cycle.PlaceDca(new Price(90m), new Quantity(1m));
-        var dcaIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
+        cycle.RegisterOrder(orderId, OrderPurpose.TakeProfit);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => 
+            cycle.RegisterOrder(orderId, OrderPurpose.TakeProfit));
+            
+        Assert.Contains("already registered", ex.Message);
+    }
+
+    [Fact]
+    public void OwnsOrder_ForUnknownOrder_ReturnsFalse()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        var orderId = InternalOrderId.New();
+
+        Assert.False(cycle.OwnsOrder(orderId));
+    }
+
+    [Fact]
+    public void TryGetOrderPurpose_ForUnknownOrder_ReturnsFalse()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        var orderId = InternalOrderId.New();
+
+        Assert.False(cycle.TryGetOrderPurpose(orderId, out _));
+    }
+
+    [Fact]
+    public void UpdatePositionSnapshot_ValidOpenPosition_UpdatesValues()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+
+        cycle.UpdatePositionSnapshot(new Quantity(100m), new Price(0.105m));
+
+        Assert.Equal(100m, cycle.PositionQuantity.Value);
+        Assert.Equal(0.105m, cycle.PositionVwap.Value);
+    }
+
+    [Fact]
+    public void UpdatePositionSnapshot_ValidEmptyPosition_UpdatesValues()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        cycle.UpdatePositionSnapshot(new Quantity(100m), new Price(0.105m));
         
-        cycle.Handle(new OrderRejected(dcaIntent.OrderId, "Insufficient funds"));
+        cycle.UpdatePositionSnapshot(new Quantity(0m), new Price(0m));
 
+        Assert.Equal(0m, cycle.PositionQuantity.Value);
+        Assert.Equal(0m, cycle.PositionVwap.Value);
+    }
+
+    [Fact]
+    public void UpdatePositionSnapshot_ReplacesPreviousValues()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        cycle.UpdatePositionSnapshot(new Quantity(100m), new Price(0.100m));
+        
+        // This is a replacement, not addition
+        cycle.UpdatePositionSnapshot(new Quantity(80m), new Price(0.102m));
+
+        Assert.Equal(80m, cycle.PositionQuantity.Value);
+        Assert.Equal(0.102m, cycle.PositionVwap.Value);
+    }
+
+    [Fact]
+    public void UpdatePositionSnapshot_EmptyQuantityWithPositiveVwap_ThrowsArgumentExceptionAndKeepsOldState()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        cycle.UpdatePositionSnapshot(new Quantity(100m), new Price(0.105m));
+
+        var ex = Assert.Throws<ArgumentException>(() => 
+            cycle.UpdatePositionSnapshot(new Quantity(0m), new Price(0.1045m)));
+            
+        Assert.Contains("VWAP must be zero when position is empty", ex.Message);
+        
+        // Ensure state was not corrupted
+        Assert.Equal(100m, cycle.PositionQuantity.Value);
+        Assert.Equal(0.105m, cycle.PositionVwap.Value);
+    }
+
+    [Fact]
+    public void UpdatePositionSnapshot_PositiveQuantityWithZeroVwap_ThrowsArgumentExceptionAndKeepsOldState()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        cycle.UpdatePositionSnapshot(new Quantity(100m), new Price(0.105m));
+
+        var ex = Assert.Throws<ArgumentException>(() => 
+            cycle.UpdatePositionSnapshot(new Quantity(50m), new Price(0m)));
+            
+        Assert.Contains("VWAP must be positive for an open position", ex.Message);
+        
+        // Ensure state was not corrupted
+        Assert.Equal(100m, cycle.PositionQuantity.Value);
+        Assert.Equal(0.105m, cycle.PositionVwap.Value);
+    }
+
+    [Fact]
+    public void EnterExitOnly_ChangesStatusToExitOnly()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        
+        cycle.EnterExitOnly();
+        
         Assert.Equal(TradeCycleStatus.ExitOnly, cycle.Status);
     }
 
     [Fact]
-    public void PlaceDca_WhenExitOnly_DoesNothing()
+    public void EnterExitOnly_IsIdempotent()
     {
-        var cycle = new TradeCycle(TradeCycleId.New(), 2m, _rules, OrderSide.Buy);
-        cycle.Start(new Price(100m), new Quantity(1m));
-        var startIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
-        cycle.Handle(new OrderExecuted(startIntent.OrderId, new Price(100m), new Quantity(1m)));
-        cycle.ClearOutbox();
-
-        cycle.PlaceDca(new Price(90m), new Quantity(1m));
-        var dcaIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
-        cycle.Handle(new OrderRejected(dcaIntent.OrderId, "Insufficient funds"));
-        cycle.ClearOutbox();
-
-        // Already in ExitOnly, shouldn't place DCA
-        cycle.PlaceDca(new Price(80m), new Quantity(2m));
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
         
-        Assert.Empty(cycle.Outbox);
+        cycle.EnterExitOnly();
+        cycle.EnterExitOnly();
+        
+        Assert.Equal(TradeCycleStatus.ExitOnly, cycle.Status);
     }
 
     [Fact]
-    public void Handle_TakeProfitExecuted_CompletesCycle()
+    public void PauseDca_WhenActive_ChangesStatusToDcaPaused()
     {
-        var cycle = new TradeCycle(TradeCycleId.New(), 2m, _rules, OrderSide.Buy);
-        cycle.Start(new Price(100m), new Quantity(1m));
-        var startIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single();
-        cycle.ClearOutbox();
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
         
-        cycle.Handle(new OrderExecuted(startIntent.OrderId, new Price(100m), new Quantity(1m)));
+        cycle.PauseDca();
         
-        var tpIntent = cycle.Outbox.OfType<PlaceOrderIntent>().Single(x => x.Purpose == OrderPurpose.TakeProfit);
+        Assert.Equal(TradeCycleStatus.DcaPaused, cycle.Status);
+    }
+
+    [Fact]
+    public void PauseDca_IsIdempotent()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
         
-        cycle.Handle(new OrderExecuted(tpIntent.OrderId, tpIntent.Price, tpIntent.Quantity));
+        cycle.PauseDca();
+        cycle.PauseDca();
         
-        Assert.Equal(TradeCycleStatus.Completed, cycle.Status);
-        Assert.Equal(0m, cycle.PositionQuantity.Value);
+        Assert.Equal(TradeCycleStatus.DcaPaused, cycle.Status);
+    }
+
+    [Fact]
+    public void PauseDca_WhenExitOnly_DoesNotWeakenStatus()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        
+        cycle.EnterExitOnly();
+        cycle.PauseDca();
+        
+        Assert.Equal(TradeCycleStatus.ExitOnly, cycle.Status);
+    }
+
+    [Fact]
+    public void EnterExitOnly_WhenDcaPaused_ChangesStatusToExitOnly()
+    {
+        var cycle = new TradeCycle(TradeCycleId.New(), TradeDirection.Long);
+        
+        cycle.PauseDca();
+        cycle.EnterExitOnly();
+        
+        Assert.Equal(TradeCycleStatus.ExitOnly, cycle.Status);
     }
 }

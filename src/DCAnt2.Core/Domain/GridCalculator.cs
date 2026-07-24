@@ -7,6 +7,14 @@ public static class GridCalculator
 {
     public static GridPlan Calculate(GridSettings settings, Price firstOrderPrice, InstrumentRules rules)
     {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(rules);
+
+        if (firstOrderPrice.Value <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(firstOrderPrice), "First order price must be positive.");
+        }
+
         var levels = new List<GridLevel>(settings.MaxLevels + 1);
         
         var currentPrice = firstOrderPrice;
@@ -17,23 +25,35 @@ public static class GridCalculator
 
         for (int i = 0; i <= settings.MaxLevels; i++)
         {
+            // Level 0 = First Order, Levels 1..MaxLevels = DCA Orders
             if (i > 0)
             {
                 // Calculate step
-                decimal stepMultiplier = (decimal)Math.Pow((double)settings.StepScale, i - 1);
+                decimal stepMultiplier = Pow(settings.StepScale, i - 1);
                 decimal stepPercent = settings.BaseStepPercent * stepMultiplier;
                 currentDistancePercent += stepPercent;
                 
                 // For Long, price goes down
                 decimal rawPrice = firstOrderPrice.Value * (1m - currentDistancePercent / 100m);
+                
+                if (rawPrice <= 0m)
+                {
+                    throw new InvalidOperationException($"Grid calculation failed: Level {i} produced non-positive price {rawPrice}. Cumulative distance is {currentDistancePercent}%.");
+                }
+                
                 currentPrice = new Price(rawPrice);
                 
                 // Calculate volume
-                decimal volMultiplier = (decimal)Math.Pow((double)settings.VolumeScale, i);
+                decimal volMultiplier = Pow(settings.VolumeScale, i);
                 currentVolume = new Money(settings.FirstOrderVolume.Value * volMultiplier);
             }
 
-            var roundedPrice = rules.RoundPrice(currentPrice);
+            var roundedPrice = rules.RoundPriceToNearest(currentPrice);
+            
+            if (roundedPrice.Value <= 0m)
+            {
+                throw new InvalidOperationException($"Grid calculation failed: Level {i} price rounded to a non-positive value. Raw price: {currentPrice.Value}, Tick size: {rules.TickSize}.");
+            }
             
             // Validate overlapping levels
             if (i > 0 && roundedPrice.Value >= levels[^1].Price.Value)
@@ -45,6 +65,11 @@ public static class GridCalculator
             var rawQty = new Quantity(currentVolume.Value / roundedPrice.Value);
             var roundedQty = rules.RoundQuantityDown(rawQty);
             
+            if (roundedQty.Value == 0m)
+            {
+                throw new InvalidOperationException($"Grid calculation failed: Level {i} quantity rounded to zero.");
+            }
+            
             // Recalculate actual money used
             var actualMoney = roundedQty.Value * roundedPrice.Value;
             
@@ -52,10 +77,6 @@ public static class GridCalculator
             if (actualMoney < rules.MinNotional)
             {
                 throw new InvalidOperationException($"Grid calculation failed: Level {i} notional ({actualMoney}) is below MinNotional ({rules.MinNotional}).");
-            }
-            if (roundedQty.Value == 0)
-            {
-                throw new InvalidOperationException($"Grid calculation failed: Level {i} quantity rounded to zero.");
             }
 
             // Validate MaxCapital
@@ -69,5 +90,25 @@ public static class GridCalculator
         }
 
         return new GridPlan(levels);
+    }
+
+    private static decimal Pow(decimal value, int exponent)
+    {
+        if (exponent < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(exponent), "Exponent cannot be negative.");
+        }
+
+        var result = 1m;
+
+        checked
+        {
+            for (var i = 0; i < exponent; i++)
+            {
+                result *= value;
+            }
+        }
+
+        return result;
     }
 }

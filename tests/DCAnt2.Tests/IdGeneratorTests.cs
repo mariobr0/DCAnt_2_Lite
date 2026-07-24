@@ -8,6 +8,27 @@ namespace DCAnt2.Tests;
 public class IdGeneratorTests
 {
     [Fact]
+    public void GenerateWithPrefix_WithEmptyPrefix_ThrowsArgumentException()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => IdGenerator.GenerateWithPrefix(""));
+        Assert.Equal("prefix", ex.ParamName);
+    }
+
+    [Fact]
+    public void GenerateWithPrefix_WithWhitespacePrefix_ThrowsArgumentException()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => IdGenerator.GenerateWithPrefix("   "));
+        Assert.Equal("prefix", ex.ParamName);
+    }
+
+    [Fact]
+    public void GenerateWithPrefix_WithNullPrefix_ThrowsArgumentException()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => IdGenerator.GenerateWithPrefix(null!));
+        Assert.Equal("prefix", ex.ParamName);
+    }
+
+    [Fact]
     public void GeneratedId_HasCorrectPrefixAndFormat()
     {
         var id = IdGenerator.GenerateWithPrefix("ord");
