@@ -60,6 +60,10 @@ public class SingleOrderContractStrategy : Strategy
     {
         try
         {
+            _stopping = false;
+            _observationFinished = false;
+            _observedOrderId = null;
+            
             ValidateCommonInputs();
             GenerateRunId();
             
