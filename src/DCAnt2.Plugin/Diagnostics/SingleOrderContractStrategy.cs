@@ -304,18 +304,38 @@ public class SingleOrderContractStrategy : Strategy
         }
 
         var targetOrder = matches[0];
+        _observedOrderId = targetOrder.Id;
         WriteLogLine(BuildSnapshotLine("Strategy", "BeforeApiCall", order: targetOrder));
 
-        var request = new CancelOrderRequestParameters
+        bool accountPresent = targetOrder.Account != null;
+        bool connectionPresent = !string.IsNullOrEmpty(targetOrder.ConnectionId);
+
+        WriteLog($"[CANCEL_REQUEST] OrderObjectPresent=True OrderId=\"{targetOrder.Id}\" AccountPresent={accountPresent} AccountId=\"{targetOrder.Account?.Id ?? "null"}\" ConnectionId=\"{targetOrder.ConnectionId ?? "null"}\" SymbolId=\"{targetOrder.Symbol?.Id ?? "null"}\" TargetMarker=\"{targetOrder.Comment ?? "null"}\" CancelAllowed={(accountPresent && connectionPresent)}");
+
+        if (!accountPresent || !connectionPresent)
         {
-            OrderId = targetOrder.Id
+            WriteLog("Cancel skipped. Reason=\"MissingConnectionContext\"");
+            return;
+        }
+
+        var request = new CancelOrderRequestParameters()
+        {
+            Order = targetOrder
         };
 
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        var result = global::TradingPlatform.BusinessLayer.Core.Instance.CancelOrder(request);
-        watch.Stop();
+        try
+        {
+            var result = global::TradingPlatform.BusinessLayer.Core.Instance.CancelOrder(request);
+            watch.Stop();
+            WriteLog($"[CancelApiResult] Status={result.Status}, Message={Quote(result.Message)}, ElapsedMs={watch.ElapsedMilliseconds}");
+        }
+        catch (Exception ex)
+        {
+            watch.Stop();
+            WriteLog($"[CancelApiException] ElapsedMs={watch.ElapsedMilliseconds} Exception={ex.GetType().Name}: {ex.Message}");
+        }
 
-        WriteLog($"CancelOrder API result: Status={result.Status}, Message={Quote(result.Message)}, ElapsedMs={watch.ElapsedMilliseconds}");
         WriteLogLine(BuildSnapshotLine("Strategy", "AfterApiCall", order: targetOrder));
     }
 
