@@ -21,8 +21,8 @@ public class SingleOrderContractStrategy : Strategy
     [InputParameter("Symbol", 2)]
     public Symbol TestSymbol = null!;
 
-    [InputParameter("Scenario", 10)]
-    public ContractTestScenario Scenario = ContractTestScenario.ObserveOnly;
+    [InputParameter("Scenario (ObserveOnly, PlaceAndObserve, CancelAndObserve)", 10)]
+    public string Scenario = "ObserveOnly";
 
     [InputParameter("Target Marker (for Observe/Cancel)", 20)]
     public string InputTargetMarker = "";
@@ -73,7 +73,7 @@ public class SingleOrderContractStrategy : Strategy
             }
             _logPath = Path.Combine(logsDir, $"DCAnt2_Contracts_{_runId}.log");
 
-            if (Scenario == ContractTestScenario.PlaceAndObserve)
+            if (Scenario == "PlaceAndObserve")
             {
                 GenerateTargetMarker();
                 WriteLog($"TARGET_MARKER_CREATED={_targetMarker}");
@@ -87,28 +87,31 @@ public class SingleOrderContractStrategy : Strategy
                 }
             }
 
-            WriteSnapshot("Start");
+            WriteLogLine(BuildSnapshotLine("Strategy", "StartSnapshot"));
 
             // Подписка на фактически доступные события Core.Instance
-            global::TradingPlatform.BusinessLayer.Core.Instance.OrderAdded += OnOrderEvent;
-            global::TradingPlatform.BusinessLayer.Core.Instance.OrderRemoved += OnOrderEvent;
+            global::TradingPlatform.BusinessLayer.Core.Instance.OrderAdded += OnOrderAdded;
+            global::TradingPlatform.BusinessLayer.Core.Instance.OrderRemoved += OnOrderRemoved;
             global::TradingPlatform.BusinessLayer.Core.Instance.OrdersHistoryAdded += OnOrderHistoryEvent;
             
-            global::TradingPlatform.BusinessLayer.Core.Instance.PositionAdded += OnPositionEvent;
-            global::TradingPlatform.BusinessLayer.Core.Instance.PositionRemoved += OnPositionEvent;
+            global::TradingPlatform.BusinessLayer.Core.Instance.PositionAdded += OnPositionAdded;
+            global::TradingPlatform.BusinessLayer.Core.Instance.PositionRemoved += OnPositionRemoved;
 
             _timer = new Timer(OnObservationTimeout, null, TimeSpan.FromSeconds(ObservationTimeoutSeconds), Timeout.InfiniteTimeSpan);
 
             switch (Scenario)
             {
-                case ContractTestScenario.ObserveOnly:
+                case "ObserveOnly":
                     // Только наблюдать, ничего не отправлять
                     break;
-                case ContractTestScenario.PlaceAndObserve:
+                case "PlaceAndObserve":
                     ExecutePlaceScenario();
                     break;
-                case ContractTestScenario.CancelAndObserve:
+                case "CancelAndObserve":
                     ExecuteCancelScenario();
+                    break;
+                default:
+                    WriteLog($"Unknown Scenario: {Scenario}. Defaulting to ObserveOnly.");
                     break;
             }
         }
@@ -129,27 +132,41 @@ public class SingleOrderContractStrategy : Strategy
         _timer = null;
 
         // 3. отписаться от событий
-        global::TradingPlatform.BusinessLayer.Core.Instance.OrderAdded -= OnOrderEvent;
-        global::TradingPlatform.BusinessLayer.Core.Instance.OrderRemoved -= OnOrderEvent;
+        global::TradingPlatform.BusinessLayer.Core.Instance.OrderAdded -= OnOrderAdded;
+        global::TradingPlatform.BusinessLayer.Core.Instance.OrderRemoved -= OnOrderRemoved;
         global::TradingPlatform.BusinessLayer.Core.Instance.OrdersHistoryAdded -= OnOrderHistoryEvent;
 
-        global::TradingPlatform.BusinessLayer.Core.Instance.PositionAdded -= OnPositionEvent;
-        global::TradingPlatform.BusinessLayer.Core.Instance.PositionRemoved -= OnPositionEvent;
+        global::TradingPlatform.BusinessLayer.Core.Instance.PositionAdded -= OnPositionAdded;
+        global::TradingPlatform.BusinessLayer.Core.Instance.PositionRemoved -= OnPositionRemoved;
 
-        // 4. собрать финальный snapshot
-        var finalSnapshot = BuildSnapshotLine("OnStop");
+        // 4. собрать итог cleanup
+        var activeTestOrdersCount = FindActiveTestOrders().Length;
+        var position = ReadPosition();
+        
+        string cleanupRequired = "Unknown";
+        string cleanupReason = "Unknown";
+        
+        if (activeTestOrdersCount > 0) 
+        {
+            cleanupRequired = "Yes";
+            cleanupReason = "ActiveTestOrdersFound";
+        }
+        else if (position != null && Math.Abs(position.Quantity) > 0)
+        {
+            cleanupRequired = "Yes";
+            cleanupReason = "OpenPositionFound";
+        }
+        else if (activeTestOrdersCount == 0 && (position == null || Math.Abs(position.Quantity) == 0))
+        {
+            cleanupRequired = "No";
+            cleanupReason = "NoTestOrdersAndNoPosition";
+        }
+
+        var extra = $"ManualCleanupRequired={cleanupRequired} CleanupReason={cleanupReason}";
+        var finalSnapshot = BuildSnapshotLine("Strategy", "OnStop", extraInfo: extra);
 
         // 5. записать финальный snapshot
         WriteLogLine(finalSnapshot);
-
-        // 6. записать итог cleanup
-        var activeOrders = FindActiveTestOrders();
-        var position = ReadPosition();
-        
-        bool needsCleanup = activeOrders.Length > 0 || (position != null && Math.Abs(position.Quantity) > 0);
-        WriteLogLine($"Manual cleanup required: {(needsCleanup ? "Yes" : "No")}");
-
-        // 7. завершить логирование - (поскольку мы используем File.AppendAllText, больше ничего закрывать не нужно)
     }
 
     private void OnObservationTimeout(object? state)
@@ -160,46 +177,38 @@ public class SingleOrderContractStrategy : Strategy
         }
         _observationFinished = true;
 
-        var snapshot = BuildSnapshotLine("Timeout");
+        var snapshot = BuildSnapshotLine("Timer", "ObservationTimeout", extraInfo: "Message=\"Observation timeout reached\"");
         WriteLogLine(snapshot);
-        WriteLogLine("Observation timeout reached");
     }
 
-    private void OnOrderEvent(Order order)
+    private void OnOrderAdded(Order order) => HandleOrderEvent("OrderAdded", order);
+    private void OnOrderRemoved(Order order) => HandleOrderEvent("OrderRemoved", order);
+
+    private void HandleOrderEvent(string source, Order order)
     {
         if (_stopping) return;
         if (!IsMatchingOrder(order)) return;
-
-        var eventName = "OrderEvent";
-        if (_observationFinished) eventName = "AFTER_OBSERVATION_TIMEOUT_" + eventName;
-
-        var line = BuildSnapshotLine(eventName, order: order);
+        var line = BuildSnapshotLine(source, "OrderState", order: order);
         WriteLogLine(line);
     }
 
     private void OnOrderHistoryEvent(OrderHistory orderHistory)
     {
         if (_stopping) return;
-        // Map OrderHistory properties back to our snapshot log format as best as possible
-        // Actually OrderHistory doesn't match Order exactly, so we do a specialized snapshot line
         if (orderHistory.Account.Id != TestAccount?.Id || orderHistory.Symbol.Id != TestSymbol?.Id) return;
         
-        var eventName = "OrderHistoryEvent";
-        if (_observationFinished) eventName = "AFTER_OBSERVATION_TIMEOUT_" + eventName;
-
-        var line = BuildSnapshotLine(eventName, orderHistory: orderHistory);
+        var line = BuildSnapshotLine("OrdersHistoryAdded", "OrderHistoryState", orderHistory: orderHistory);
         WriteLogLine(line);
     }
 
-    private void OnPositionEvent(Position position)
+    private void OnPositionAdded(Position position) => HandlePositionEvent("PositionAdded", position);
+    private void OnPositionRemoved(Position position) => HandlePositionEvent("PositionRemoved", position);
+
+    private void HandlePositionEvent(string source, Position position)
     {
         if (_stopping) return;
         if (position.Account.Id != TestAccount?.Id || position.Symbol.Id != TestSymbol?.Id) return;
-
-        var eventName = "PositionEvent";
-        if (_observationFinished) eventName = "AFTER_OBSERVATION_TIMEOUT_" + eventName;
-
-        var line = BuildSnapshotLine(eventName, position: position);
+        var line = BuildSnapshotLine(source, "PositionState", position: position);
         WriteLogLine(line);
     }
 
@@ -213,9 +222,6 @@ public class SingleOrderContractStrategy : Strategy
         if (position == null)
         {
             WriteLog("WARNING: Position could not be read definitively. Assuming 0, but this is dangerous.");
-            // According to plan, if we cannot definitively know it's zero, we might forbid it. 
-            // In Quantower, `Core.Positions.FirstOrDefault` returning null means no position exists.
-            // So position == null actually MEANS strictly 0 position.
         }
         
         var activeOrders = FindActiveTestOrders();
@@ -224,7 +230,7 @@ public class SingleOrderContractStrategy : Strategy
             throw new InvalidOperationException($"Place forbidden. Found {activeOrders.Length} active qtct_ orders");
         }
 
-        WriteSnapshot("Before API Call");
+        WriteLogLine(BuildSnapshotLine("Strategy", "BeforeApiCall"));
         
         var request = new PlaceOrderRequestParameters
         {
@@ -243,7 +249,7 @@ public class SingleOrderContractStrategy : Strategy
         watch.Stop();
 
         WriteLog($"PlaceOrder API result: Status={result.Status}, Message={result.Message}, ReturnedOrderId={result.OrderId}, ElapsedMs={watch.ElapsedMilliseconds}");
-        WriteSnapshot("After API Call");
+        WriteLogLine(BuildSnapshotLine("Strategy", "AfterApiCall"));
     }
 
     private void ExecuteCancelScenario()
@@ -261,7 +267,7 @@ public class SingleOrderContractStrategy : Strategy
         }
 
         var targetOrder = matches[0];
-        WriteSnapshot("Before API Call", targetOrder);
+        WriteLogLine(BuildSnapshotLine("Strategy", "BeforeApiCall", order: targetOrder));
 
         var request = new CancelOrderRequestParameters
         {
@@ -273,13 +279,21 @@ public class SingleOrderContractStrategy : Strategy
         watch.Stop();
 
         WriteLog($"CancelOrder API result: Status={result.Status}, Message={result.Message}, ElapsedMs={watch.ElapsedMilliseconds}");
-        WriteSnapshot("After API Call", targetOrder);
+        WriteLogLine(BuildSnapshotLine("Strategy", "AfterApiCall", order: targetOrder));
     }
 
     private void ValidateCommonInputs()
     {
         if (TestAccount == null || TestSymbol == null)
             throw new InvalidOperationException("TestAccount and TestSymbol must be selected.");
+    }
+
+    private int CountActiveOrders()
+    {
+        return global::TradingPlatform.BusinessLayer.Core.Instance.Orders.Count(o =>
+            o.Account.Id == TestAccount?.Id &&
+            o.Symbol.Id == TestSymbol?.Id &&
+            o.Status == OrderStatus.Opened);
     }
 
     private Order[] FindActiveTestOrders()
@@ -326,19 +340,39 @@ public class SingleOrderContractStrategy : Strategy
         _targetMarker = $"qtct_{DateTime.UtcNow:ddMMyy}_{Guid.NewGuid().ToString("N").Substring(0, 8)}";
     }
 
-    private void WriteSnapshot(string eventName, Order? order = null)
-    {
-        var line = BuildSnapshotLine(eventName, order);
-        WriteLogLine(line);
-    }
-
-    private string BuildSnapshotLine(string eventName, Order? order = null, Position? position = null, OrderHistory? orderHistory = null)
+    private string BuildSnapshotLine(string source, string eventName, Order? order = null, Position? position = null, OrderHistory? orderHistory = null, string extraInfo = "")
     {
         position ??= ReadPosition();
 
         var ts = DateTime.UtcNow.ToString("O");
-        var pQty = position != null ? position.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown";
-        var pPrice = position != null ? position.OpenPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown";
+        
+        string positionState = "None";
+        string pQty = "0";
+        string pPrice = "Unknown";
+        if (position != null)
+        {
+            if (Math.Abs(position.Quantity) > 0)
+            {
+                positionState = "Open";
+                pQty = position.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                pPrice = position.OpenPrice.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+            else
+            {
+                positionState = "None";
+                pQty = "0";
+            }
+        }
+        else
+        {
+            // FirstOrDefault returns null if there is no open position for this account/symbol
+            positionState = "None";
+            pQty = "0";
+        }
+
+        var activeOrdersCount = CountActiveOrders();
+        var activeTestOrdersCount = FindActiveTestOrders().Length;
+        var matchingOrdersCount = FindMatchingActiveOrders().Length;
 
         var oId = order != null ? order.Id : (orderHistory != null ? orderHistory.Id : "Unknown");
         var oStatus = order != null ? order.Status.ToString() : (orderHistory != null ? orderHistory.Status.ToString() : "Unknown");
@@ -349,12 +383,17 @@ public class SingleOrderContractStrategy : Strategy
         var oAvgP = order != null ? order.AverageFillPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : (orderHistory != null ? orderHistory.AverageFillPrice.ToString(System.Globalization.CultureInfo.InvariantCulture) : "Unknown");
 
         var threadId = Thread.CurrentThread.ManagedThreadId;
+        var accName = TestAccount != null ? $"\"{TestAccount.Name}\"" : "Unknown";
+        var obsFin = _observationFinished ? " ObservationFinished=True" : "";
 
-        return $"[{ts}] [{_runId}] [{_targetMarker}] [{Scenario}] [{eventName}] " +
-               $"AccountId={TestAccount?.Id} SymbolId={TestSymbol?.Id} " +
+        return $"[{ts}] [{_runId}] [{_targetMarker}] [{Scenario}] [{source}] [{eventName}] " +
+               $"AccountId={TestAccount?.Id} AccountName={accName} SymbolId={TestSymbol?.Id} " +
+               $"ActiveOrdersCount={activeOrdersCount} ActiveTestOrdersCount={activeTestOrdersCount} MatchingOrdersCount={matchingOrdersCount} " +
+               $"PositionState={positionState} PositionQty={pQty} PositionOpenPrice={pPrice} " +
                $"OrderId={oId} Status={oStatus} Comment={oComment} " +
-               $"Price={oPrice} TotalQty={oTQty} FilledQty={oFQty} AverageFillPrice={oAvgP} " +
-               $"PositionQty={pQty} PositionOpenPrice={pPrice} ThreadId={threadId}";
+               $"Price={oPrice} TotalQty={oTQty} FilledQty={oFQty} AverageFillPrice={oAvgP}{obsFin}" +
+               (string.IsNullOrEmpty(extraInfo) ? "" : $" {extraInfo}") +
+               $" ThreadId={threadId}";
     }
 
     private void WriteLog(string message)
