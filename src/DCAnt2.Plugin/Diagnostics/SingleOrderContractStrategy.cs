@@ -223,8 +223,10 @@ public class SingleOrderContractStrategy : Strategy
         var position = ReadPosition();
         if (position != null && Math.Abs(position.Quantity) > 0)
         {
+            WriteLogLine(BuildSnapshotLine("Strategy", "POSITION_CHECK", extraInfo: $"Result=Open Quantity={position.Quantity} PlaceAllowed=False"));
             throw new InvalidOperationException($"Place forbidden. Position is not zero. Found: {position.Quantity}");
         }
+        WriteLogLine(BuildSnapshotLine("Strategy", "POSITION_CHECK", extraInfo: "Result=None Quantity=0 PlaceAllowed=True"));
         
         var activeOrders = FindActiveTestOrders();
         if (activeOrders.Length > 0)
