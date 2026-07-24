@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using TradingPlatform.BusinessLayer;
 
 namespace DCAnt2.Plugin.Diagnostics;
@@ -259,6 +260,29 @@ public class SingleOrderContractStrategy : Strategy
 
         WriteLog($"PlaceOrder API result: Status={result.Status}, Message={Quote(result.Message)}, ReturnedOrderId={Quote(result.OrderId)}, ElapsedMs={watch.ElapsedMilliseconds}");
         WriteLogLine(BuildSnapshotLine("Strategy", "AfterApiCall"));
+        
+        ScheduleProbe(250);
+        ScheduleProbe(500);
+        ScheduleProbe(1000);
+        ScheduleProbe(2000);
+        ScheduleProbe(5000);
+    }
+
+    private void ScheduleProbe(int delayMs)
+    {
+        Task.Run(async () =>
+        {
+            await Task.Delay(delayMs);
+            if (_stopping) return;
+            try
+            {
+                WriteLogLine(BuildSnapshotLine("Probe", "PostPlaceSnapshot", extraInfo: $"DelayMs={delayMs}"));
+            }
+            catch (Exception ex)
+            {
+                WriteLog($"Probe {delayMs}ms failed: {ex.Message}");
+            }
+        });
     }
 
     private void ExecuteCancelScenario()
