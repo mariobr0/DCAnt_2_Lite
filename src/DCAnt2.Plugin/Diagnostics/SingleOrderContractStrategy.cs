@@ -30,10 +30,10 @@ public class SingleOrderContractStrategy : Strategy
     [InputParameter("Observation Timeout (seconds)", 30)]
     public int ObservationTimeoutSeconds = 30;
 
-    [InputParameter("Test Price (PlaceAndObserve)", 40)]
+    [InputParameter("Test Price (PlaceAndObserve)", 40, minimum: 0.0, maximum: 1000000.0, increment: 0.00000001, decimalPlaces: 8)]
     public double TestPrice = 0.0;
 
-    [InputParameter("Test Quantity", 50)]
+    [InputParameter("Test Quantity", 50, minimum: 0.0, maximum: 1000000.0, increment: 0.00000001, decimalPlaces: 8)]
     public double TestQuantity = 1.0;
 
     [InputParameter("Test Side", 60)]
@@ -188,11 +188,20 @@ public class SingleOrderContractStrategy : Strategy
     private void HandleOrderEvent(string source, Order order)
     {
         if (_stopping) return;
-        if (!IsMatchingOrder(order)) return;
+        if (order.Account.Id != TestAccount?.Id || order.Symbol.Id != TestSymbol?.Id) return;
         
-        _observedOrderId = order.Id;
-        
-        var line = BuildSnapshotLine(source, "OrderState", order: order);
+        bool markerMatches = order.Comment == _targetMarker;
+        bool orderIdMatches = !string.IsNullOrWhiteSpace(_observedOrderId) && order.Id == _observedOrderId;
+
+        if (markerMatches)
+        {
+            _observedOrderId = order.Id;
+            orderIdMatches = true;
+        }
+
+        // Логируем ВСЕ события для Account/Symbol, чтобы не пропустить ордера с пустым Comment
+        string extra = $"MarkerMatches={markerMatches} OrderIdMatches={orderIdMatches}";
+        var line = BuildSnapshotLine(source, "OrderState", order: order, extraInfo: extra);
         WriteLogLine(line);
     }
 
@@ -204,8 +213,7 @@ public class SingleOrderContractStrategy : Strategy
         bool markerMatches = orderHistory.Comment == _targetMarker;
         bool orderIdMatches = !string.IsNullOrWhiteSpace(_observedOrderId) && orderHistory.Id == _observedOrderId;
 
-        if (!markerMatches && !orderIdMatches) return;
-        
+        // Логируем ВСЕ исторические события для Account/Symbol
         string extra = $"MarkerMatches={markerMatches} OrderIdMatches={orderIdMatches}";
         var line = BuildSnapshotLine("OrdersHistoryAdded", "OrderHistoryState", orderHistory: orderHistory, extraInfo: extra);
         WriteLogLine(line);
