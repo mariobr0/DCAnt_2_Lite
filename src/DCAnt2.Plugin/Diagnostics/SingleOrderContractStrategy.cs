@@ -117,7 +117,7 @@ public class SingleOrderContractStrategy : Strategy
         }
         catch (Exception ex)
         {
-            WriteLog($"ERROR: {ex.Message}");
+            WriteLog($"ERROR: {ex}");
             Stop();
         }
     }
@@ -196,6 +196,7 @@ public class SingleOrderContractStrategy : Strategy
     {
         if (_stopping) return;
         if (orderHistory.Account.Id != TestAccount?.Id || orderHistory.Symbol.Id != TestSymbol?.Id) return;
+        if (orderHistory.Comment != _targetMarker) return;
         
         var line = BuildSnapshotLine("OrdersHistoryAdded", "OrderHistoryState", orderHistory: orderHistory);
         WriteLogLine(line);
@@ -387,10 +388,10 @@ public class SingleOrderContractStrategy : Strategy
         var obsFin = _observationFinished ? " ObservationFinished=True" : "";
 
         return $"[{ts}] [{_runId}] [{_targetMarker}] [{Scenario}] [{source}] [{eventName}] " +
-               $"AccountId={TestAccount?.Id} AccountName={accName} SymbolId={TestSymbol?.Id} " +
+               $"AccountId=\"{TestAccount?.Id}\" AccountName={accName} SymbolId={TestSymbol?.Id} " +
                $"ActiveOrdersCount={activeOrdersCount} ActiveTestOrdersCount={activeTestOrdersCount} MatchingOrdersCount={matchingOrdersCount} " +
                $"PositionState={positionState} PositionQty={pQty} PositionOpenPrice={pPrice} " +
-               $"OrderId={oId} Status={oStatus} Comment={oComment} " +
+               $"OrderId={oId} Status={oStatus} Comment=\"{oComment}\" " +
                $"Price={oPrice} TotalQty={oTQty} FilledQty={oFQty} AverageFillPrice={oAvgP}{obsFin}" +
                (string.IsNullOrEmpty(extraInfo) ? "" : $" {extraInfo}") +
                $" ThreadId={threadId}";
