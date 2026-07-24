@@ -58,16 +58,14 @@ public class GridPlanTests
     }
 
     [Fact]
-    public void Constructor_CreatesDefensiveCopy()
+    public void Constructor_DoesNotMutateWhenSourceListChanges()
     {
-        var source = new List<GridLevel>
-        {
-            new(0, new Price(100m), new Quantity(1m))
-        };
+        var entry = new GridLevel(0, new Price(100m), new Quantity(1m));
+        var source = new List<GridLevel> { entry };
 
         var plan = new GridPlan(source);
 
-        source.Clear();
+        source.Add(new GridLevel(1, new Price(90m), new Quantity(2m)));
 
         Assert.Single(plan.Levels);
     }
@@ -83,5 +81,41 @@ public class GridPlanTests
         var plan = new GridPlan(source);
 
         Assert.False(plan.Levels is GridLevel[]);
+    }
+
+    [Fact]
+    public void Constructor_CalculatesAggregatesCorrectly_SingleEntry()
+    {
+        var levels = new List<GridLevel>
+        {
+            new(0, new Price(100m), new Quantity(1.5m))
+        };
+
+        var plan = new GridPlan(levels);
+
+        Assert.Equal(1.5m, plan.TotalQuantity.Value);
+        Assert.Equal(150m, plan.TotalNotional.Value);
+        Assert.Equal(100m, plan.ExpectedVwap.Value);
+    }
+
+    [Fact]
+    public void Constructor_CalculatesAggregatesCorrectly_MultiLevel_FractionalVwap()
+    {
+        var levels = new List<GridLevel>
+        {
+            new(0, new Price(100m), new Quantity(1m)), // notional = 100
+            new(1, new Price(90m), new Quantity(2m)),  // notional = 180
+            new(2, new Price(80m), new Quantity(4m))   // notional = 320
+        };
+
+        // Total Qty = 7
+        // Total Notional = 600
+        // Expected VWAP = 600 / 7 = 85.7142857142857... (fractional)
+
+        var plan = new GridPlan(levels);
+
+        Assert.Equal(7m, plan.TotalQuantity.Value);
+        Assert.Equal(600m, plan.TotalNotional.Value);
+        Assert.Equal(600m / 7m, plan.ExpectedVwap.Value);
     }
 }

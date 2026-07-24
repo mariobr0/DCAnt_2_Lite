@@ -10,7 +10,7 @@ public class InstrumentRulesTests
 
     public InstrumentRulesTests()
     {
-        _rules = new InstrumentRules("USDT", 0.5m, 0.001m, 10m);
+        _rules = new InstrumentRules("USDT", 0.5m, 0.001m, new Quantity(0.001m), 10m);
     }
 
     [Theory]
@@ -35,5 +35,12 @@ public class InstrumentRulesTests
         var qty = new Quantity(input);
         var rounded = _rules.RoundQuantityDown(qty);
         Assert.Equal(expected, rounded.Value);
+    }
+
+    [Fact]
+    public void Constructor_MinQuantityZero_ThrowsArgumentOutOfRangeException()
+    {
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => new InstrumentRules("USDT", 0.5m, 0.001m, new Quantity(0m), 10m));
+        Assert.Contains("Min quantity must be greater than zero", ex.Message);
     }
 }

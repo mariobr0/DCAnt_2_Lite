@@ -70,17 +70,22 @@ public static class GridCalculator
                 throw new InvalidOperationException($"Grid calculation failed: Level {i} quantity rounded to zero.");
             }
             
+            if (roundedQty.Value < rules.MinQuantity.Value)
+            {
+                throw new InvalidOperationException($"Grid calculation failed: Level {i} quantity ({roundedQty.Value}) is below MinQuantity ({rules.MinQuantity.Value}).");
+            }
+
             // Recalculate actual money used
-            var actualMoney = roundedQty.Value * roundedPrice.Value;
+            var actualMoney = new Money(roundedQty.Value * roundedPrice.Value);
             
             // Validate MinNotional
-            if (actualMoney < rules.MinNotional)
+            if (actualMoney.Value < rules.MinNotional)
             {
-                throw new InvalidOperationException($"Grid calculation failed: Level {i} notional ({actualMoney}) is below MinNotional ({rules.MinNotional}).");
+                throw new InvalidOperationException($"Grid calculation failed: Level {i} notional ({actualMoney.Value}) is below MinNotional ({rules.MinNotional}).");
             }
 
             // Validate MaxCapital
-            totalCapitalUsed = totalCapitalUsed + new Money(actualMoney);
+            totalCapitalUsed = totalCapitalUsed + actualMoney;
             if (totalCapitalUsed.Value > settings.MaxCapital.Value)
             {
                 throw new InvalidOperationException($"Grid calculation failed: Total capital ({totalCapitalUsed.Value}) exceeds MaxCapital ({settings.MaxCapital.Value}).");

@@ -9,6 +9,9 @@ public readonly record struct GridLevel(int Index, Price Price, Quantity Quantit
 public record GridPlan
 {
     public IReadOnlyList<GridLevel> Levels { get; }
+    public Quantity TotalQuantity { get; }
+    public Money TotalNotional { get; }
+    public Price ExpectedVwap { get; }
 
     public GridPlan(IEnumerable<GridLevel> levels)
     {
@@ -19,6 +22,9 @@ public record GridPlan
         {
             throw new ArgumentException("Grid levels cannot be empty.", nameof(levels));
         }
+
+        decimal totalQty = 0m;
+        decimal totalNotional = 0m;
 
         for (int i = 0; i < array.Length; i++)
         {
@@ -38,8 +44,14 @@ public record GridPlan
             {
                 throw new ArgumentException($"Grid level {i} must have a positive quantity.", nameof(levels));
             }
+
+            totalQty += level.Quantity.Value;
+            totalNotional += (level.Price.Value * level.Quantity.Value);
         }
 
+        TotalQuantity = new Quantity(totalQty);
+        TotalNotional = new Money(totalNotional);
+        ExpectedVwap = new Price(TotalNotional.Value / TotalQuantity.Value);
         Levels = Array.AsReadOnly(array);
     }
 }

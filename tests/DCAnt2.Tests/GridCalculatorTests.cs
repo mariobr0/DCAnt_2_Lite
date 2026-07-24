@@ -1,4 +1,4 @@
-using DCAnt2.Core.Domain;
+﻿using DCAnt2.Core.Domain;
 using System;
 using Xunit;
 
@@ -6,7 +6,7 @@ namespace DCAnt2.Tests;
 
 public class GridCalculatorTests
 {
-    private readonly InstrumentRules _rules = new("USDT", 0.1m, 0.001m, 10m);
+    private readonly InstrumentRules _rules = new("USDT", 0.1m, 0.001m, new Quantity(0.001m), 10m);
 
     [Fact]
     public void Calculate_GeneratesCorrectGrid()
@@ -23,7 +23,7 @@ public class GridCalculatorTests
         var plan = GridCalculator.Calculate(settings, new Price(10000m), _rules);
 
         Assert.Equal(3, plan.Levels.Count);
-        
+
         // L0: 100 USDT at 10000 -> 0.01 Qty, 100 actual USDT
         Assert.Equal(0, plan.Levels[0].Index);
         Assert.Equal(10000m, plan.Levels[0].Price.Value);
@@ -44,7 +44,7 @@ public class GridCalculatorTests
     public void Calculate_ThrowsWhenLevelsOverlap()
     {
         var settings = new GridSettings(new Money(100m), new Money(1000m), 1, new Percentage(0.0001m), 1.0m, 1.0m);
-        var rules = new InstrumentRules("USDT", 10m, 0.001m, 10m);
+        var rules = new InstrumentRules("USDT", 10m, 0.001m, new Quantity(0.001m), 10m);
 
         var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(10000m), rules));
         Assert.Contains("overlapped", ex.Message);
@@ -54,7 +54,7 @@ public class GridCalculatorTests
     public void Calculate_ThrowsWhenBelowMinNotional()
     {
         var settings = new GridSettings(new Money(1m), new Money(1000m), 1, new Percentage(1.0m), 1.0m, 1.0m);
-        
+
         var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(1000m), _rules));
         Assert.Contains("MinNotional", ex.Message);
     }
@@ -63,7 +63,7 @@ public class GridCalculatorTests
     public void Calculate_ThrowsWhenMaxCapitalExceeded()
     {
         var settings = new GridSettings(new Money(100m), new Money(150m), 1, new Percentage(1.0m), 1.0m, 1.0m);
-        
+
         var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(10000m), _rules));
         Assert.Contains("MaxCapital", ex.Message);
     }
@@ -113,7 +113,7 @@ public class GridCalculatorTests
     public void Calculate_PriceRoundedToZero_ThrowsInvalidOperationException()
     {
         // Price = 0.04, tick = 0.1 -> rounds to 0
-        var rules = new InstrumentRules("USDT", 0.1m, 1m, 1m);
+        var rules = new InstrumentRules("USDT", 0.1m, 1m, new Quantity(1m), 1m);
         var settings = new GridSettings(new Money(100m), new Money(1000m), 0, new Percentage(1.0m), 1.0m, 1.0m);
         var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(0.04m), rules));
         Assert.Contains("rounded", ex.Message);
@@ -127,7 +127,7 @@ public class GridCalculatorTests
             maxCapital: new Money(1000m),
             maxLevels: 1,
             baseStepPercent: new Percentage(1.0m),
-            stepScale: 1.5m, 
+            stepScale: 1.5m,
             volumeScale: 1.25m
         );
 
@@ -152,7 +152,7 @@ public class GridCalculatorTests
         );
 
         var plan = GridCalculator.Calculate(settings, new Price(10000m), _rules);
-        
+
         Assert.Single(plan.Levels);
         Assert.Equal(0, plan.Levels[0].Index);
         Assert.Equal(10000m, plan.Levels[0].Price.Value);
@@ -163,8 +163,8 @@ public class GridCalculatorTests
     {
         var settings = new GridSettings(
             firstOrderVolume: new Money(100m),
-            maxCapital: new Money(1000000000m), 
-            maxLevels: 1, 
+            maxCapital: new Money(1000000000m),
+            maxLevels: 1,
             baseStepPercent: new Percentage(1.0m),
             stepScale: 1.0m,
             volumeScale: decimal.MaxValue
@@ -172,5 +172,69 @@ public class GridCalculatorTests
 
         Assert.Throws<OverflowException>(() => GridCalculator.Calculate(settings, new Price(10000m), _rules));
     }
-}
 
+    [Fact]
+    public void Calculate_QuantityBelowMinQuantity_ThrowsInvalidOperationException()
+    {
+        var rules = new InstrumentRules("USDT", 1m, 1m, new Quantity(5m), 1m);
+        var settings = new GridSettings(new Money(4m), new Money(1000m), 0, new Percentage(1.0m), 1.0m, 1.0m);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(1m), rules));
+        Assert.Contains("MinQuantity", ex.Message);
+    }
+
+    [Fact]
+    public void Calculate_QuantityEqualToMinQuantity_SucceedsWhenMinNotionalSatisfied()
+    {
+        var rules = new InstrumentRules("USDT", 1m, 1m, new Quantity(5m), 1m);
+        var settings = new GridSettings(new Money(5m), new Money(1000m), 0, new Percentage(1.0m), 1.0m, 1.0m);
+
+        var plan = GridCalculator.Calculate(settings, new Price(1m), rules);
+        Assert.Single(plan.Levels);
+        Assert.Equal(5m, plan.Levels[0].Quantity.Value);
+    }
+
+    [Fact]
+    public void Calculate_QuantityBelowMinQuantityAfterRounding_ThrowsInvalidOperationException()
+    {
+        // raw Qty = 5.9, rounded = 5.0, MinQuantity = 5.5
+        var rules = new InstrumentRules("USDT", 1m, 1m, new Quantity(5.5m), 1m);
+        var settings = new GridSettings(new Money(5.9m), new Money(1000m), 0, new Percentage(1.0m), 1.0m, 1.0m);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(1m), rules));
+        Assert.Contains("MinQuantity", ex.Message);
+    }
+
+    [Fact]
+    public void Calculate_QuantityPassesMinQuantityButNotionalBelowMinimum_Throws()
+    {
+        var rules = new InstrumentRules("USDT", 1m, 1m, new Quantity(5m), 10m);
+        var settings = new GridSettings(new Money(6m), new Money(1000m), 0, new Percentage(1.0m), 1.0m, 1.0m);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(1m), rules));
+        Assert.Contains("MinNotional", ex.Message);
+    }
+
+    [Fact]
+    public void Calculate_NotionalPassesMinimumButQuantityBelowMinimum_Throws()
+    {
+        var rules = new InstrumentRules("USDT", 1m, 1m, new Quantity(5m), 2m);
+        var settings = new GridSettings(new Money(400m), new Money(1000m), 0, new Percentage(1.0m), 1.0m, 1.0m);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(100m), rules));
+        Assert.Contains("MinQuantity", ex.Message);
+    }
+
+    [Fact]
+    public void Calculate_NotionalBelowMinNotionalAfterRounding_ThrowsInvalidOperationException()
+    {
+        // raw price = 14, tick = 10 -> rounded price = 10
+        // volume = 19. raw qty = 1.9, step = 1 -> rounded qty = 1
+        // notional rounded = 10 * 1 = 10. min notional = 11
+        var rules = new InstrumentRules("USDT", 10m, 1m, new Quantity(1m), 11m);
+        var settings = new GridSettings(new Money(19m), new Money(1000m), 0, new Percentage(1.0m), 1.0m, 1.0m);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(14m), rules));
+        Assert.Contains("MinNotional", ex.Message);
+    }
+}
