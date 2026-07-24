@@ -12,18 +12,18 @@ public record GridSettings
     /// A value of zero produces a plan containing only the first order.
     /// </summary>
     public int MaxLevels { get; }
-    public decimal BaseStepPercent { get; }
+    public Percentage BaseStepPercent { get; }
     public decimal StepScale { get; }
     public decimal VolumeScale { get; }
 
-    public GridSettings(Money firstOrderVolume, Money maxCapital, int maxLevels, decimal baseStepPercent, decimal stepScale, decimal volumeScale)
+    public GridSettings(Money firstOrderVolume, Money maxCapital, int maxLevels, Percentage baseStepPercent, decimal stepScale, decimal volumeScale)
     {
         if (firstOrderVolume.Value <= 0) throw new ArgumentOutOfRangeException(nameof(firstOrderVolume), "FirstOrderVolume must be positive.");
         if (maxCapital.Value <= 0) throw new ArgumentOutOfRangeException(nameof(maxCapital), "MaxCapital must be positive.");
         if (firstOrderVolume.Value > maxCapital.Value) throw new ArgumentOutOfRangeException(nameof(firstOrderVolume), "FirstOrderVolume cannot exceed MaxCapital.");
         if (maxLevels < 0) throw new ArgumentOutOfRangeException(nameof(maxLevels), "MaxLevels cannot be negative.");
         if (maxLevels > 1000) throw new ArgumentOutOfRangeException(nameof(maxLevels), "MaxLevels cannot exceed 1000.");
-        if (baseStepPercent <= 0) throw new ArgumentOutOfRangeException(nameof(baseStepPercent), "BaseStepPercent must be positive.");
+        if (baseStepPercent.Value <= 0) throw new ArgumentOutOfRangeException(nameof(baseStepPercent), "BaseStepPercent must be positive.");
         if (stepScale <= 0) throw new ArgumentOutOfRangeException(nameof(stepScale), "StepScale must be positive.");
         if (volumeScale <= 0) throw new ArgumentOutOfRangeException(nameof(volumeScale), "VolumeScale must be positive.");
 

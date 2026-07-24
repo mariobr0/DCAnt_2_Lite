@@ -49,6 +49,21 @@ public readonly record struct Price
         if (value < 0) throw new ArgumentOutOfRangeException(nameof(value), "Price cannot be negative.");
         Value = value;
     }
-    
+
     public override string ToString() => Value.ToString("0.########", System.Globalization.CultureInfo.InvariantCulture);
+}
+
+public readonly record struct Percentage
+{
+    public decimal Value { get; }
+
+    public static Percentage Zero => new(0m);
+    
+    public Percentage(decimal value)
+    {
+        if (value < 0) throw new ArgumentOutOfRangeException(nameof(value), "Percentage cannot be negative.");
+        Value = value;
+    }
+    
+    public override string ToString() => Value.ToString("0.########", System.Globalization.CultureInfo.InvariantCulture) + "%";
 }

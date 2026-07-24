@@ -13,7 +13,7 @@ public class GridSettingsTests
         var maxCap = new Money(100m);
         
         var ex = Assert.Throws<ArgumentOutOfRangeException>(() => 
-            new GridSettings(firstOrderVol, maxCap, 5, 1m, 1m, 1m));
+            new GridSettings(firstOrderVol, maxCap, 5, new Percentage(1m), 1m, 1m));
             
         Assert.Equal("firstOrderVolume", ex.ParamName);
     }
@@ -24,7 +24,7 @@ public class GridSettingsTests
         var firstOrderVol = new Money(100m);
         var maxCap = new Money(100m);
         
-        var settings = new GridSettings(firstOrderVol, maxCap, 5, 1m, 1m, 1m);
+        var settings = new GridSettings(firstOrderVol, maxCap, 5, new Percentage(1m), 1m, 1m);
             
         Assert.Equal(100m, settings.FirstOrderVolume.Value);
         Assert.Equal(100m, settings.MaxCapital.Value);
@@ -37,7 +37,7 @@ public class GridSettingsTests
         var maxCap = new Money(1000m);
         
         var ex = Assert.Throws<ArgumentOutOfRangeException>(() => 
-            new GridSettings(firstOrderVol, maxCap, 1001, 1m, 1m, 1m));
+            new GridSettings(firstOrderVol, maxCap, 1001, new Percentage(1m), 1m, 1m));
             
         Assert.Equal("maxLevels", ex.ParamName);
     }

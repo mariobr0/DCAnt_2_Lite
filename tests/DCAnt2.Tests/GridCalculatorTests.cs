@@ -15,7 +15,7 @@ public class GridCalculatorTests
             firstOrderVolume: new Money(100m),
             maxCapital: new Money(1000m),
             maxLevels: 2,
-            baseStepPercent: 1.0m,
+            baseStepPercent: new Percentage(1.0m),
             stepScale: 2.0m,
             volumeScale: 2.0m
         );
@@ -43,7 +43,7 @@ public class GridCalculatorTests
     [Fact]
     public void Calculate_ThrowsWhenLevelsOverlap()
     {
-        var settings = new GridSettings(new Money(100m), new Money(1000m), 1, 0.0001m, 1.0m, 1.0m);
+        var settings = new GridSettings(new Money(100m), new Money(1000m), 1, new Percentage(0.0001m), 1.0m, 1.0m);
         var rules = new InstrumentRules("USDT", 10m, 0.001m, 10m);
 
         var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(10000m), rules));
@@ -53,7 +53,7 @@ public class GridCalculatorTests
     [Fact]
     public void Calculate_ThrowsWhenBelowMinNotional()
     {
-        var settings = new GridSettings(new Money(1m), new Money(1000m), 1, 1.0m, 1.0m, 1.0m);
+        var settings = new GridSettings(new Money(1m), new Money(1000m), 1, new Percentage(1.0m), 1.0m, 1.0m);
         
         var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(1000m), _rules));
         Assert.Contains("MinNotional", ex.Message);
@@ -62,7 +62,7 @@ public class GridCalculatorTests
     [Fact]
     public void Calculate_ThrowsWhenMaxCapitalExceeded()
     {
-        var settings = new GridSettings(new Money(100m), new Money(150m), 1, 1.0m, 1.0m, 1.0m);
+        var settings = new GridSettings(new Money(100m), new Money(150m), 1, new Percentage(1.0m), 1.0m, 1.0m);
         
         var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(10000m), _rules));
         Assert.Contains("MaxCapital", ex.Message);
@@ -78,7 +78,7 @@ public class GridCalculatorTests
     [Fact]
     public void Calculate_WithNullRules_ThrowsArgumentNullException()
     {
-        var settings = new GridSettings(new Money(100m), new Money(1000m), 2, 1.0m, 2.0m, 2.0m);
+        var settings = new GridSettings(new Money(100m), new Money(1000m), 2, new Percentage(1.0m), 2.0m, 2.0m);
         var ex = Assert.Throws<ArgumentNullException>(() => GridCalculator.Calculate(settings, new Price(10000m), null!));
         Assert.Equal("rules", ex.ParamName);
     }
@@ -86,7 +86,7 @@ public class GridCalculatorTests
     [Fact]
     public void Calculate_WithZeroFirstOrderPrice_ThrowsArgumentOutOfRangeException()
     {
-        var settings = new GridSettings(new Money(100m), new Money(1000m), 2, 1.0m, 2.0m, 2.0m);
+        var settings = new GridSettings(new Money(100m), new Money(1000m), 2, new Percentage(1.0m), 2.0m, 2.0m);
         var ex = Assert.Throws<ArgumentOutOfRangeException>(() => GridCalculator.Calculate(settings, new Price(0m), _rules));
         Assert.Equal("firstOrderPrice", ex.ParamName);
     }
@@ -95,7 +95,7 @@ public class GridCalculatorTests
     public void Calculate_CumulativeDistanceEquals100_ThrowsInvalidOperationException()
     {
         // 1st DCA level will drop 100% -> price = 0
-        var settings = new GridSettings(new Money(100m), new Money(1000m), 1, 100.0m, 1.0m, 1.0m);
+        var settings = new GridSettings(new Money(100m), new Money(1000m), 1, new Percentage(100.0m), 1.0m, 1.0m);
         var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(10000m), _rules));
         Assert.Contains("non-positive", ex.Message);
     }
@@ -104,7 +104,7 @@ public class GridCalculatorTests
     public void Calculate_CumulativeDistanceGreaterThan100_ThrowsInvalidOperationException()
     {
         // 1st DCA level will drop 105% -> price < 0
-        var settings = new GridSettings(new Money(100m), new Money(1000m), 1, 105.0m, 1.0m, 1.0m);
+        var settings = new GridSettings(new Money(100m), new Money(1000m), 1, new Percentage(105.0m), 1.0m, 1.0m);
         var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(10000m), _rules));
         Assert.Contains("non-positive", ex.Message);
     }
@@ -114,7 +114,7 @@ public class GridCalculatorTests
     {
         // Price = 0.04, tick = 0.1 -> rounds to 0
         var rules = new InstrumentRules("USDT", 0.1m, 1m, 1m);
-        var settings = new GridSettings(new Money(100m), new Money(1000m), 0, 1.0m, 1.0m, 1.0m);
+        var settings = new GridSettings(new Money(100m), new Money(1000m), 0, new Percentage(1.0m), 1.0m, 1.0m);
         var ex = Assert.Throws<InvalidOperationException>(() => GridCalculator.Calculate(settings, new Price(0.04m), rules));
         Assert.Contains("rounded", ex.Message);
     }
@@ -126,7 +126,7 @@ public class GridCalculatorTests
             firstOrderVolume: new Money(100m),
             maxCapital: new Money(1000m),
             maxLevels: 1,
-            baseStepPercent: 1.0m,
+            baseStepPercent: new Percentage(1.0m),
             stepScale: 1.5m, 
             volumeScale: 1.25m
         );
@@ -146,7 +146,7 @@ public class GridCalculatorTests
             firstOrderVolume: new Money(100m),
             maxCapital: new Money(1000m),
             maxLevels: 0,
-            baseStepPercent: 1.0m,
+            baseStepPercent: new Percentage(1.0m),
             stepScale: 1.0m,
             volumeScale: 1.0m
         );
@@ -165,7 +165,7 @@ public class GridCalculatorTests
             firstOrderVolume: new Money(100m),
             maxCapital: new Money(1000000000m), 
             maxLevels: 1, 
-            baseStepPercent: 1.0m,
+            baseStepPercent: new Percentage(1.0m),
             stepScale: 1.0m,
             volumeScale: decimal.MaxValue
         );
@@ -173,3 +173,4 @@ public class GridCalculatorTests
         Assert.Throws<OverflowException>(() => GridCalculator.Calculate(settings, new Price(10000m), _rules));
     }
 }
+

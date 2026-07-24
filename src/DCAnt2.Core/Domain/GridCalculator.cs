@@ -30,7 +30,7 @@ public static class GridCalculator
             {
                 // Calculate step
                 decimal stepMultiplier = Pow(settings.StepScale, i - 1);
-                decimal stepPercent = settings.BaseStepPercent * stepMultiplier;
+                decimal stepPercent = settings.BaseStepPercent.Value * stepMultiplier;
                 currentDistancePercent += stepPercent;
                 
                 // For Long, price goes down
